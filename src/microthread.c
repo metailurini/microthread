@@ -372,6 +372,7 @@ static size_t g_select_frees;
 static int g_fail_next_fd_waiter_alloc;
 static int g_fail_next_io_backend_init;
 static int g_fail_next_io_backend_register;
+static int g_fail_next_io_backend_unregister;
 static size_t g_fd_waiter_allocs;
 static size_t g_fd_waiter_frees;
 static size_t g_io_backend_inits;
@@ -1529,6 +1530,10 @@ static void mt_io_backend_remove(mt_fd_waiter_t *waiter) {
     }
 #ifdef MT_TESTING
     MT_TEST_COUNTER_INC(g_io_backend_unregisters);
+    if (g_fail_next_io_backend_unregister) {
+        g_fail_next_io_backend_unregister = 0;
+        return;
+    }
 #endif
     if (g_rt.io_backend_kind == MT_IO_BACKEND_POLL || g_rt.io_backend_fd < 0) {
         return;
@@ -3784,6 +3789,10 @@ void mt_test_fail_next_io_backend_register(void) {
     g_fail_next_io_backend_register = 1;
 }
 
+void mt_test_fail_next_io_backend_unregister(void) {
+    g_fail_next_io_backend_unregister = 1;
+}
+
 void mt_test_reset_faults(void) {
     g_fail_next_task_alloc = 0;
     g_fail_next_stack_alloc = 0;
@@ -3797,6 +3806,7 @@ void mt_test_reset_faults(void) {
     g_fail_next_fd_waiter_alloc = 0;
     g_fail_next_io_backend_init = 0;
     g_fail_next_io_backend_register = 0;
+    g_fail_next_io_backend_unregister = 0;
 }
 
 void *mt_test_current_stack_base(void) {

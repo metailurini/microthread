@@ -155,6 +155,7 @@ void   mt_test_fail_next_select_alloc(void);
 void   mt_test_fail_next_fd_waiter_alloc(void);
 void   mt_test_fail_next_io_backend_init(void);
 void   mt_test_fail_next_io_backend_register(void);
+void   mt_test_fail_next_io_backend_unregister(void);
 void   mt_test_reset_faults(void);
 int    mt_test_run_until_blocked(void);
 void  *mt_test_current_stack_base(void);

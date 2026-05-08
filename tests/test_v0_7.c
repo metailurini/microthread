@@ -184,6 +184,38 @@ static void get_listener_port(int fd) {
     atomic_store(&g_listener_port, (int)ntohs(sin.sin_port));
 }
 
+static int count_open_fds(void) {
+    long max_fd = sysconf(_SC_OPEN_MAX);
+    if (max_fd < 0 || max_fd > 4096) {
+        max_fd = 4096;
+    }
+    int count = 0;
+    for (int fd = 0; fd < (int)max_fd; ++fd) {
+        errno = 0;
+        if (fcntl(fd, F_GETFD) >= 0 || errno != EBADF) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static void require_file_contains(const char *path, const char *needle) {
+    FILE *fp = fopen(path, "rb");
+    CHECK(fp != NULL);
+    CHECK(fseek(fp, 0, SEEK_END) == 0);
+    long len = ftell(fp);
+    CHECK(len >= 0);
+    CHECK(fseek(fp, 0, SEEK_SET) == 0);
+    char *buf = (char *)malloc((size_t)len + 1u);
+    CHECK(buf != NULL);
+    size_t n = fread(buf, 1, (size_t)len, fp);
+    CHECK(n == (size_t)len);
+    buf[n] = '\0';
+    CHECK(strstr(buf, needle) != NULL);
+    free(buf);
+    fclose(fp);
+}
+
 static int connect_loopback_port(int port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     CHECK(fd >= 0);
@@ -1013,6 +1045,19 @@ static void test_tcp_accept_and_net_wrappers(void) {
     reset_runtime();
     g_listen_fd = mt_net_listen_tcp("127.0.0.1", "0", 64);
     CHECK(g_listen_fd >= 0);
+    int open_before_conflict = count_open_fds();
+    get_listener_port(g_listen_fd);
+    char port_buf[32];
+    snprintf(port_buf, sizeof(port_buf), "%d", atomic_load(&g_listener_port));
+    int conflict_fd = mt_net_listen_tcp("127.0.0.1", port_buf, 64);
+    CHECK(conflict_fd == MT_ERR);
+    CHECK(count_open_fds() == open_before_conflict);
+    assert_fd_nonblocking(g_listen_fd);
+    finish_runtime();
+
+    reset_runtime();
+    g_listen_fd = mt_net_listen_tcp("127.0.0.1", "0", 64);
+    CHECK(g_listen_fd >= 0);
     get_listener_port(g_listen_fd);
     CHECK(mt_go(task_echo_server, NULL) > 0);
     CHECK(mt_go(task_echo_clients, NULL) > 0);
@@ -1152,6 +1197,33 @@ static void test_close_reuse_shutdown_faults_and_stress(void) {
     finish_runtime();
 
     reset_runtime();
+    make_socketpair();
+    mt_test_fail_next_timer_alloc();
+    CHECK(mt_go(task_wait_read, NULL) > 0);
+    CHECK(mt_runtime_start(WORKERS_1) == MT_OK);
+    CHECK(atomic_load(&g_rc) == MT_ERR_NOMEM);
+    finish_runtime();
+
+    reset_runtime();
+    make_socketpair();
+    mt_test_fail_next_io_backend_unregister();
+    CHECK(mt_go(task_wait_read, NULL) > 0);
+    CHECK(mt_go(task_close_waited_fd_after_sleep, NULL) > 0);
+    CHECK(mt_runtime_start(WORKERS_2) == MT_OK);
+    CHECK(atomic_load(&g_rc) == MT_ERR_CLOSED);
+    finish_runtime();
+
+    for (int cycle = 0; cycle < 8; ++cycle) {
+        reset_runtime();
+        make_socketpair();
+        CHECK(mt_go(task_wait_read, NULL) > 0);
+        CHECK(mt_go(task_write_peer_after_sleep, "r") > 0);
+        CHECK(mt_runtime_start((cycle % 2) ? WORKERS_2 : WORKERS_1) == MT_OK);
+        CHECK(atomic_load(&g_rc) == MT_OK);
+        finish_runtime();
+    }
+
+    reset_runtime();
     int fds[STRESS_PAIRS][2];
     for (int i = 0; i < STRESS_PAIRS; ++i) {
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, fds[i]) == 0);
@@ -1192,6 +1264,17 @@ static void test_close_reuse_shutdown_faults_and_stress(void) {
     assert_io_counters_balanced();
 }
 
+static void test_documentation_contracts(void) {
+    require_file_contains("README.md", "fd/socket readiness");
+    require_file_contains("README.md", "blocking OS I/O");
+    require_file_contains("README.md", "mt_fd_close");
+    require_file_contains("README.md", "MT_FORCE_POLL_BACKEND");
+    require_file_contains("README.md", "not an HTTP framework");
+    require_file_contains("examples/echo_server.c", "mt_net_accept");
+    require_file_contains("examples/echo_server.c", "mt_net_read");
+    require_file_contains("examples/echo_server.c", "mt_net_write");
+}
+
 int main(void) {
     const char *backend_at_start;
     CHECK(mt_init() == MT_OK);
@@ -1207,6 +1290,7 @@ int main(void) {
     test_tcp_accept_and_net_wrappers();
     test_fd_reuse_and_readiness_races();
     test_close_reuse_shutdown_faults_and_stress();
+    test_documentation_contracts();
     printf("v0.7 fd/socket io tests passed (%s backend)\n", backend_at_start);
     return 0;
 }

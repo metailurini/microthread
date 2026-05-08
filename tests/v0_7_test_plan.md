@@ -424,7 +424,11 @@ For `mt_fd_read()` / `mt_fd_write()`:
   hang or leak under bounded stress.
 - **TC-IO-STRESS-004**: repeated short runtime cycles with fd waiters do not leak
   descriptors.
-- **TC-IO-STRESS-005**: ThreadSanitizer reports no data races in fd wait tests.
+- **TC-IO-STRESS-005**: ThreadSanitizer reports no data races in fd wait tests
+  on context backends that ThreadSanitizer can model. On Linux `ucontext`, the
+  checked-in `make io-tsan` target must skip with a clear message because TSan is
+  known to be unreliable with `makecontext`/`swapcontext`; ASan/UBSan and stress
+  targets still cover the fd I/O path in that configuration.
 - **TC-IO-STRESS-006**: AddressSanitizer reports no memory errors in fd wait tests.
 - **TC-IO-STRESS-007**: Valgrind reports no definite leaks where available.
 - **TC-IO-STRESS-008**: no busy-spin under idle fd waits; CPU use remains bounded
