@@ -114,8 +114,24 @@ $(BUILD_DIR)/test_v0_6_tsan$(EXE): tests/test_v0_6.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
 	$(CC) $(TEST_CPPFLAGS) -fsanitize=thread -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/libmicrothread_poll.a: $(SRC) $(ASM_SRC)
+$(BUILD_DIR)/test_v0_7$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
+	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+
+$(BUILD_DIR)/test_v0_7_poll$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
+	@mkdir -p $(dir $@)
+	$(CC) $(TEST_CPPFLAGS) -DMT_FORCE_POLL_BACKEND $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+
+$(BUILD_DIR)/test_v0_7_asan$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
+	@mkdir -p $(dir $@)
+	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+
+$(BUILD_DIR)/test_v0_7_poll_asan$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
+	@mkdir -p $(dir $@)
+	$(CC) $(TEST_CPPFLAGS) -DMT_FORCE_POLL_BACKEND -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+
+$(BUILD_DIR)/libmicrothread_poll.a: $(SRC) $(ASM_SRC)
+	@mkdir -p $(dir $@) $(BUILD_DIR)/src
 	$(CC) $(FORCE_POLL_CPPFLAGS) $(CFLAGS) -c src/microthread.c -o $(BUILD_DIR)/src/microthread_poll.o
 	@if [ -n "$(ASM_SRC)" ]; then \
 		$(CC) $(FORCE_POLL_CPPFLAGS) $(CFLAGS) -c $(ASM_SRC) -o $(BUILD_DIR)/src/context_asm_macos_poll.o; \
@@ -172,13 +188,15 @@ $(BUILD_DIR)/echo_server$(EXE): examples/echo_server.c $(LIB)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
 
-test: $(BUILD_DIR)/test_v0_1$(EXE) $(BUILD_DIR)/test_v0_2$(EXE) $(BUILD_DIR)/test_v0_3$(EXE) $(BUILD_DIR)/test_v0_4$(EXE) $(BUILD_DIR)/test_v0_5$(EXE) $(BUILD_DIR)/test_v0_6$(EXE) $(BUILD_DIR)/test_guard_disabled$(EXE)
+test: $(BUILD_DIR)/test_v0_1$(EXE) $(BUILD_DIR)/test_v0_2$(EXE) $(BUILD_DIR)/test_v0_3$(EXE) $(BUILD_DIR)/test_v0_4$(EXE) $(BUILD_DIR)/test_v0_5$(EXE) $(BUILD_DIR)/test_v0_6$(EXE) $(BUILD_DIR)/test_v0_7$(EXE) $(BUILD_DIR)/test_v0_7_poll$(EXE) $(BUILD_DIR)/test_guard_disabled$(EXE)
 	$(BUILD_DIR)/test_v0_1$(EXE)
 	$(BUILD_DIR)/test_v0_2$(EXE)
 	$(BUILD_DIR)/test_v0_3$(EXE)
 	$(BUILD_DIR)/test_v0_4$(EXE)
 	$(BUILD_DIR)/test_v0_5$(EXE)
 	$(BUILD_DIR)/test_v0_6$(EXE)
+	$(BUILD_DIR)/test_v0_7$(EXE)
+	$(BUILD_DIR)/test_v0_7_poll$(EXE)
 	$(BUILD_DIR)/test_guard_disabled$(EXE)
 
 stress: $(BUILD_DIR)/test_v0_1_full$(EXE) $(BUILD_DIR)/test_v0_2_full$(EXE) $(BUILD_DIR)/test_v0_3_full$(EXE) $(BUILD_DIR)/test_v0_4_full$(EXE)
@@ -187,18 +205,20 @@ stress: $(BUILD_DIR)/test_v0_1_full$(EXE) $(BUILD_DIR)/test_v0_2_full$(EXE) $(BU
 	$(BUILD_DIR)/test_v0_3_full$(EXE)
 	$(BUILD_DIR)/test_v0_4_full$(EXE)
 
-sanitize: $(BUILD_DIR)/test_v0_1_asan$(EXE) $(BUILD_DIR)/test_v0_2_asan$(EXE) $(BUILD_DIR)/test_v0_3_asan$(EXE) $(BUILD_DIR)/test_v0_4_asan$(EXE) $(BUILD_DIR)/test_v0_5_asan$(EXE) $(BUILD_DIR)/test_v0_6_asan$(EXE)
+sanitize: $(BUILD_DIR)/test_v0_1_asan$(EXE) $(BUILD_DIR)/test_v0_2_asan$(EXE) $(BUILD_DIR)/test_v0_3_asan$(EXE) $(BUILD_DIR)/test_v0_4_asan$(EXE) $(BUILD_DIR)/test_v0_5_asan$(EXE) $(BUILD_DIR)/test_v0_6_asan$(EXE) $(BUILD_DIR)/test_v0_7_asan$(EXE) $(BUILD_DIR)/test_v0_7_poll_asan$(EXE)
 	$(BUILD_DIR)/test_v0_1_asan$(EXE)
 	$(BUILD_DIR)/test_v0_2_asan$(EXE)
 	$(BUILD_DIR)/test_v0_3_asan$(EXE)
 	$(BUILD_DIR)/test_v0_4_asan$(EXE)
 	$(BUILD_DIR)/test_v0_5_asan$(EXE)
 	$(BUILD_DIR)/test_v0_6_asan$(EXE)
+	$(BUILD_DIR)/test_v0_7_asan$(EXE)
+	$(BUILD_DIR)/test_v0_7_poll_asan$(EXE)
 
 tsan: $(BUILD_DIR)/test_v0_6_tsan$(EXE)
 	$(BUILD_DIR)/test_v0_6_tsan$(EXE)
 
-valgrind: $(BUILD_DIR)/test_v0_1$(EXE) $(BUILD_DIR)/test_v0_2$(EXE) $(BUILD_DIR)/test_v0_3$(EXE) $(BUILD_DIR)/test_v0_4$(EXE) $(BUILD_DIR)/test_v0_5$(EXE) $(BUILD_DIR)/test_v0_6$(EXE)
+valgrind: $(BUILD_DIR)/test_v0_1$(EXE) $(BUILD_DIR)/test_v0_2$(EXE) $(BUILD_DIR)/test_v0_3$(EXE) $(BUILD_DIR)/test_v0_4$(EXE) $(BUILD_DIR)/test_v0_5$(EXE) $(BUILD_DIR)/test_v0_6$(EXE) $(BUILD_DIR)/test_v0_7$(EXE) $(BUILD_DIR)/test_v0_7_poll$(EXE)
 	@if command -v valgrind >/dev/null 2>&1; then \
 		valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 $(BUILD_DIR)/test_v0_1$(EXE); \
 		valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 $(BUILD_DIR)/test_v0_2$(EXE); \
@@ -206,6 +226,8 @@ valgrind: $(BUILD_DIR)/test_v0_1$(EXE) $(BUILD_DIR)/test_v0_2$(EXE) $(BUILD_DIR)
 		valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 $(BUILD_DIR)/test_v0_4$(EXE); \
 		valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 $(BUILD_DIR)/test_v0_5$(EXE); \
 		valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 $(BUILD_DIR)/test_v0_6$(EXE); \
+		valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 $(BUILD_DIR)/test_v0_7$(EXE); \
+		valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 $(BUILD_DIR)/test_v0_7_poll$(EXE); \
 	else \
 		echo "valgrind not found; skipping valgrind target"; \
 	fi

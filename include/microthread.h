@@ -139,6 +139,7 @@ size_t mt_debug_completed_task_count(void);
 size_t mt_debug_sleeping_task_count(void);
 size_t mt_debug_channel_waiting_task_count(void);
 size_t mt_debug_join_waiting_task_count(void);
+size_t mt_debug_fd_waiting_task_count(void);
 int    mt_debug_current_task_id(void);
 
 #ifdef MT_TESTING

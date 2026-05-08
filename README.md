@@ -122,6 +122,10 @@ Run the default suite:
 make test
 ```
 
+The default suite includes the v0.7 I/O tests twice: once with the platform's
+native backend when available, and once with `MT_FORCE_POLL_BACKEND` so the
+portable `poll` fallback stays covered.
+
 Run sanitizer builds where supported:
 
 ```sh

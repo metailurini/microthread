@@ -2115,6 +2115,10 @@ int mt_init(void) {
     }
 
     memset(&g_rt, 0, sizeof(g_rt));
+    g_rt.io_backend_kind = MT_IO_BACKEND_NONE;
+    g_rt.io_backend_fd = -1;
+    g_rt.io_wake_read_fd = -1;
+    g_rt.io_wake_write_fd = -1;
 #if MT_HAS_OS_THREADS
     if (pthread_mutex_init(&g_rt.lock, NULL) != 0) {
         return MT_ERR;
@@ -2285,16 +2289,22 @@ static void mt_worker_loop(mt_context_t *scheduler_ctx, int worker_index, int sl
     mt_lock();
     g_rt.active_workers++;
     for (;;) {
-        if (g_rt.stopping) {
+        if (g_rt.stopping &&
+            (g_rt.run_result != MT_ERR_CANCELLED || g_rt.runq_head == NULL)) {
             break;
         }
 
         uint64_t now_ns = mt_now_ns();
-        mt_wake_expired_timers(now_ns);
-        mt_poll_fd_waiters_once(now_ns);
+        if (!g_rt.stopping) {
+            mt_wake_expired_timers(now_ns);
+            mt_poll_fd_waiters_once(now_ns);
+        }
 
         mt_task_t *task = mt_runq_pop();
         if (!task) {
+            if (g_rt.stopping) {
+                break;
+            }
             if (g_rt.live_count == 0) {
                 g_rt.stopping = 1;
                 mt_notify_all();
@@ -3704,6 +3714,13 @@ size_t mt_debug_channel_waiting_task_count(void) {
 size_t mt_debug_join_waiting_task_count(void) {
     mt_lock();
     size_t v = g_rt.join_waiting_count;
+    mt_unlock();
+    return v;
+}
+
+size_t mt_debug_fd_waiting_task_count(void) {
+    mt_lock();
+    size_t v = g_rt.fd_waiting_count;
     mt_unlock();
     return v;
 }
