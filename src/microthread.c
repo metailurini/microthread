@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -20,8 +21,13 @@
 #include <windows.h>
 #define MT_HAS_OS_THREADS 0
 #else
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netdb.h>
 #include <pthread.h>
+#include <poll.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 #define MT_HAS_OS_THREADS 1
@@ -38,6 +44,7 @@ typedef enum mt_task_state {
     MT_TASK_SLEEPING,
     MT_TASK_WAITING_CHAN,
     MT_TASK_WAITING_SELECT,
+    MT_TASK_WAITING_FD,
     MT_TASK_WAITING_JOIN,
     MT_TASK_DEAD
 } mt_task_state_t;
@@ -58,6 +65,7 @@ typedef struct mt_stack {
 } mt_stack_t;
 
 typedef struct mt_select_waiter mt_select_waiter_t;
+typedef struct mt_fd_waiter mt_fd_waiter_t;
 
 enum {
     MT_STACK_ALLOC_NONE = 0,
@@ -90,6 +98,10 @@ typedef struct mt_task {
     int select_result;
     int select_in_timer;
     int select_counted_waiting;
+    mt_fd_waiter_t *fd_waiter;
+    int fd_result;
+    int fd_ready_events;
+    int fd_in_timer;
 } mt_task_t;
 
 struct mt_select_waiter {
@@ -101,6 +113,15 @@ struct mt_select_waiter {
     int active;
     mt_select_waiter_t *task_next;
     mt_select_waiter_t *chan_next;
+};
+
+struct mt_fd_waiter {
+    mt_task_t *task;
+    int fd;
+    int events;
+    int ready_events;
+    int active;
+    mt_fd_waiter_t *next;
 };
 
 struct mt_task_handle {
@@ -174,6 +195,8 @@ typedef struct mt_runtime {
     size_t completed_count;
     size_t channel_waiting_count;
     size_t join_waiting_count;
+    mt_fd_waiter_t *fd_waiters;
+    size_t fd_waiting_count;
 } mt_runtime_t;
 
 static mt_runtime_t g_rt;
@@ -230,6 +253,8 @@ static mt_context_t *mt_current_scheduler_ctx(void) {
 
 static void mt_runq_push(mt_task_t *task);
 static void mt_select_timeout_ready(mt_task_t *task);
+static void mt_fd_timeout_ready(mt_task_t *task);
+static void mt_poll_fd_waiters_once(uint64_t now_ns);
 
 static void mt_task_register(mt_task_t *task) {
     task->all_next = g_rt.all_tasks;
@@ -881,6 +906,8 @@ static void mt_wake_expired_timers(uint64_t now_ns) {
         task = mt_timer_pop();
         if (task->state == MT_TASK_WAITING_SELECT) {
             mt_select_timeout_ready(task);
+        } else if (task->state == MT_TASK_WAITING_FD) {
+            mt_fd_timeout_ready(task);
         } else {
             task->state = MT_TASK_READY;
             mt_runq_push(task);
@@ -1143,6 +1170,204 @@ static void mt_chan_ready_waiter(mt_task_t *task, int result) {
     mt_runq_push(task);
 }
 
+#if !defined(_WIN32)
+static short mt_fd_events_to_poll(int events) {
+    short pevents = 0;
+    if (events & MT_FD_READ) {
+        pevents |= POLLIN;
+    }
+    if (events & MT_FD_WRITE) {
+        pevents |= POLLOUT;
+    }
+    return pevents;
+}
+
+static int mt_poll_revents_to_fd_events(short revents) {
+    int events = 0;
+    if (revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) {
+        events |= MT_FD_READ;
+    }
+    if (revents & (POLLOUT | POLLHUP | POLLERR | POLLNVAL)) {
+        events |= MT_FD_WRITE;
+    }
+    return events;
+}
+
+static int mt_fd_waiter_conflicts(int fd, int events) {
+    for (mt_fd_waiter_t *w = g_rt.fd_waiters; w; w = w->next) {
+        if (w->active && w->fd == fd && (w->events & events) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void mt_fd_waiter_add(mt_fd_waiter_t *waiter) {
+    waiter->active = 1;
+    waiter->next = g_rt.fd_waiters;
+    g_rt.fd_waiters = waiter;
+    g_rt.fd_waiting_count++;
+    mt_notify_all();
+}
+
+static int mt_fd_waiter_remove(mt_fd_waiter_t *waiter) {
+    if (!waiter || !waiter->active) {
+        return 0;
+    }
+    mt_fd_waiter_t **link = &g_rt.fd_waiters;
+    while (*link) {
+        if (*link == waiter) {
+            *link = waiter->next;
+            waiter->next = NULL;
+            waiter->active = 0;
+            if (g_rt.fd_waiting_count > 0) {
+                g_rt.fd_waiting_count--;
+            }
+            return 1;
+        }
+        link = &(*link)->next;
+    }
+    waiter->active = 0;
+    return 0;
+}
+
+static void mt_fd_free_waiter(mt_fd_waiter_t *waiter) {
+    free(waiter);
+}
+
+static void mt_fd_ready_waiter(mt_fd_waiter_t *waiter, int result, int ready_events) {
+    if (!waiter || !waiter->task) {
+        return;
+    }
+    mt_task_t *task = waiter->task;
+    mt_fd_waiter_remove(waiter);
+    if (task->fd_in_timer) {
+        mt_timer_remove(task);
+        task->fd_in_timer = 0;
+    }
+    task->fd_result = result;
+    task->fd_ready_events = ready_events;
+    if (task->state == MT_TASK_WAITING_FD) {
+        task->state = MT_TASK_READY;
+        mt_runq_push(task);
+    }
+}
+
+static void mt_fd_timeout_ready(mt_task_t *task) {
+    if (!task) {
+        return;
+    }
+    task->fd_in_timer = 0;
+    mt_fd_waiter_t *waiter = task->fd_waiter;
+    if (waiter) {
+        mt_fd_waiter_remove(waiter);
+    }
+    task->fd_result = MT_ERR_TIMEOUT;
+    task->fd_ready_events = 0;
+    task->state = MT_TASK_READY;
+    mt_runq_push(task);
+}
+
+static void mt_poll_fd_waiters_with_timeout(int timeout_ms) {
+    if (g_rt.fd_waiting_count == 0) {
+        return;
+    }
+
+    size_t count = 0;
+    for (mt_fd_waiter_t *w = g_rt.fd_waiters; w; w = w->next) {
+        if (w->active) {
+            count++;
+        }
+    }
+    if (count == 0) {
+        return;
+    }
+
+    struct pollfd *pfds = (struct pollfd *)calloc(count, sizeof(*pfds));
+    mt_fd_waiter_t **waiters = (mt_fd_waiter_t **)calloc(count, sizeof(*waiters));
+    if (!pfds || !waiters) {
+        free(pfds);
+        free(waiters);
+        return;
+    }
+
+    size_t i = 0;
+    for (mt_fd_waiter_t *w = g_rt.fd_waiters; w && i < count; w = w->next) {
+        if (!w->active) {
+            continue;
+        }
+        pfds[i].fd = w->fd;
+        pfds[i].events = mt_fd_events_to_poll(w->events) | POLLERR | POLLHUP;
+        pfds[i].revents = 0;
+        waiters[i] = w;
+        i++;
+    }
+    count = i;
+
+    mt_unlock();
+    int nready;
+    do {
+        nready = poll(pfds, count, timeout_ms);
+    } while (nready < 0 && errno == EINTR);
+    mt_lock();
+
+    if (nready > 0) {
+        for (i = 0; i < count; ++i) {
+            if (pfds[i].revents == 0) {
+                continue;
+            }
+            mt_fd_waiter_t *w = waiters[i];
+            if (!w || !w->active || w->fd != pfds[i].fd) {
+                continue;
+            }
+            int ready_events = mt_poll_revents_to_fd_events(pfds[i].revents) & w->events;
+            if (ready_events == 0 && (pfds[i].revents & (POLLERR | POLLHUP | POLLNVAL))) {
+                ready_events = w->events;
+            }
+            mt_fd_ready_waiter(w, MT_OK, ready_events);
+        }
+    }
+
+    free(pfds);
+    free(waiters);
+}
+
+static void mt_poll_fd_waiters_once(uint64_t now_ns) {
+    (void)now_ns;
+    mt_poll_fd_waiters_with_timeout(0);
+}
+
+static void mt_fd_wake_for_close(int fd) {
+    mt_fd_waiter_t *w = g_rt.fd_waiters;
+    while (w) {
+        mt_fd_waiter_t *next = w->next;
+        if (w->active && w->fd == fd) {
+            mt_fd_ready_waiter(w, MT_ERR_CLOSED, 0);
+        }
+        w = next;
+    }
+}
+#else
+static void mt_fd_timeout_ready(mt_task_t *task) {
+    if (task) {
+        task->state = MT_TASK_READY;
+        mt_runq_push(task);
+    }
+}
+
+static void mt_poll_fd_waiters_once(uint64_t now_ns) {
+    (void)now_ns;
+}
+
+static void mt_poll_fd_waiters_with_timeout(int timeout_ms) {
+    (void)timeout_ms;
+}
+
+static void mt_fd_wake_for_close(int fd) {
+    (void)fd;
+}
+#endif
+
 static int mt_chan_remove_waiter(mt_task_t *task) {
     mt_chan_t *ch = task->chan_wait_ch;
     int removed = 0;
@@ -1170,6 +1395,7 @@ static mt_task_status_t mt_status_from_task(const mt_task_t *task) {
         case MT_TASK_SLEEPING: return MT_TASK_STATUS_SLEEPING;
         case MT_TASK_WAITING_CHAN: return MT_TASK_STATUS_WAITING_CHAN;
         case MT_TASK_WAITING_SELECT: return MT_TASK_STATUS_WAITING_CHAN;
+        case MT_TASK_WAITING_FD: return MT_TASK_STATUS_WAITING_CHAN;
         case MT_TASK_WAITING_JOIN: return MT_TASK_STATUS_WAITING_JOIN;
         case MT_TASK_DEAD: return MT_TASK_STATUS_DONE;
     }
@@ -1284,6 +1510,12 @@ static void mt_task_destroy(mt_task_t *task) {
         return;
     }
     mt_select_free_task_waiters(task);
+    if (task->fd_waiter) {
+        mt_fd_waiter_remove(task->fd_waiter);
+        mt_fd_free_waiter(task->fd_waiter);
+        task->fd_waiter = NULL;
+        task->fd_in_timer = 0;
+    }
     mt_task_unregister(task);
     mt_ctx_destroy(&task->ctx);
     mt_stack_free(&task->stack);
@@ -1472,6 +1704,12 @@ static void mt_task_after_switch(mt_task_t *task) {
                 ? MT_TASK_STATUS_CANCELLED
                 : MT_TASK_STATUS_WAITING_CHAN;
         }
+    } else if (task->state == MT_TASK_WAITING_FD) {
+        if (task->handle && !task->handle->completed) {
+            task->handle->status = task->handle->cancel_requested
+                ? MT_TASK_STATUS_CANCELLED
+                : MT_TASK_STATUS_WAITING_CHAN;
+        }
     } else if (task->state == MT_TASK_WAITING_JOIN) {
         if (task->handle && !task->handle->completed) {
             task->handle->status = task->handle->cancel_requested
@@ -1520,7 +1758,9 @@ static void mt_worker_loop(mt_context_t *scheduler_ctx, int worker_index, int sl
             break;
         }
 
-        mt_wake_expired_timers(mt_now_ns());
+        uint64_t now_ns = mt_now_ns();
+        mt_wake_expired_timers(now_ns);
+        mt_poll_fd_waiters_once(now_ns);
 
         mt_task_t *task = mt_runq_pop();
         if (!task) {
@@ -1531,9 +1771,28 @@ static void mt_worker_loop(mt_context_t *scheduler_ctx, int worker_index, int sl
             }
 
             mt_task_t *next_timer = mt_timer_peek();
+            if (g_rt.fd_waiting_count > 0) {
+                int poll_timeout_ms = 10;
+                if (next_timer) {
+                    uint64_t now_for_poll = mt_now_ns();
+                    if (next_timer->wake_ns <= now_for_poll) {
+                        poll_timeout_ms = 0;
+                    } else {
+                        uint64_t delay_ns = next_timer->wake_ns - now_for_poll;
+                        uint64_t delay_ms = (delay_ns + MT_NS_PER_MS - 1u) / MT_NS_PER_MS;
+                        if (delay_ms < (uint64_t)poll_timeout_ms) {
+                            poll_timeout_ms = (int)delay_ms;
+                        }
+                    }
+                }
+                mt_poll_fd_waiters_with_timeout(poll_timeout_ms);
+                continue;
+            }
             if (!next_timer) {
                 if (g_rt.running_tasks == 0 &&
-                    (g_rt.channel_waiting_count > 0 || g_rt.join_waiting_count > 0)) {
+                    (g_rt.channel_waiting_count > 0 ||
+                     g_rt.join_waiting_count > 0 ||
+                     g_rt.fd_waiting_count > 0)) {
                     g_rt.run_result = MT_ERR_STATE;
                     g_rt.stopping = 1;
                     mt_notify_all();
@@ -1840,6 +2099,11 @@ static void mt_task_wake_for_cancel(mt_task_t *task) {
             break;
         case MT_TASK_WAITING_SELECT:
             mt_select_unpark_task(task, MT_ERR_CANCELLED, task->select_index);
+            break;
+        case MT_TASK_WAITING_FD:
+            if (task->fd_waiter) {
+                mt_fd_ready_waiter(task->fd_waiter, MT_ERR_CANCELLED, 0);
+            }
             break;
         case MT_TASK_WAITING_JOIN:
             if (mt_handle_remove_joiner(task->join_waiting_on, task)) {
@@ -2366,6 +2630,348 @@ int mt_chan_is_closed(const mt_chan_t *ch) {
     mt_unlock();
     return closed;
 }
+
+#if !defined(_WIN32)
+static int mt_fd_validate_events(int events) {
+    return events != 0 && (events & ~(MT_FD_READ | MT_FD_WRITE)) == 0;
+}
+
+static uint64_t mt_deadline_from_timeout(uint64_t timeout_ms) {
+    uint64_t now_ns = mt_now_ns();
+    uint64_t timeout_ns = timeout_ms > (UINT64_MAX / MT_NS_PER_MS)
+        ? UINT64_MAX
+        : timeout_ms * MT_NS_PER_MS;
+    return UINT64_MAX - now_ns < timeout_ns ? UINT64_MAX : now_ns + timeout_ns;
+}
+
+static uint64_t mt_timeout_left_ms(uint64_t deadline_ns) {
+    uint64_t now_ns = mt_now_ns();
+    if (deadline_ns <= now_ns) {
+        return 0;
+    }
+    uint64_t left_ns = deadline_ns - now_ns;
+    return (left_ns + MT_NS_PER_MS - 1u) / MT_NS_PER_MS;
+}
+
+int mt_fd_set_nonblocking(int fd) {
+    if (fd < 0) {
+        return MT_ERR_INVALID;
+    }
+#if defined(_WIN32)
+    (void)fd;
+    return MT_ERR_STATE;
+#else
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return errno == EBADF ? MT_ERR_INVALID : MT_ERR;
+    }
+    if ((flags & O_NONBLOCK) != 0) {
+        return MT_OK;
+    }
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 ? MT_OK : MT_ERR;
+#endif
+}
+
+int mt_fd_wait(int fd, int events, uint64_t timeout_ms, int *ready_events) {
+    if (ready_events) {
+        *ready_events = 0;
+    }
+    if (fd < 0 || !mt_fd_validate_events(events) || !ready_events) {
+        return MT_ERR_INVALID;
+    }
+    mt_task_t *task = mt_current_task();
+    if (!task) {
+        return MT_ERR_STATE;
+    }
+
+    struct pollfd pfd;
+    pfd.fd = fd;
+    pfd.events = mt_fd_events_to_poll(events) | POLLERR | POLLHUP;
+    pfd.revents = 0;
+    int nready;
+    do {
+        nready = poll(&pfd, 1, 0);
+    } while (nready < 0 && errno == EINTR);
+    if (nready < 0) {
+        return errno == EBADF ? MT_ERR_INVALID : MT_ERR;
+    }
+    if (nready > 0) {
+        *ready_events = mt_poll_revents_to_fd_events(pfd.revents) & events;
+        if (*ready_events == 0 && (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+            *ready_events = events;
+        }
+        return MT_OK;
+    }
+    if (timeout_ms == 0) {
+        return MT_ERR_TIMEOUT;
+    }
+
+    mt_lock();
+    if (mt_fd_waiter_conflicts(fd, events)) {
+        mt_unlock();
+        return MT_ERR_STATE;
+    }
+    mt_fd_waiter_t *waiter = (mt_fd_waiter_t *)calloc(1, sizeof(*waiter));
+    if (!waiter) {
+        mt_unlock();
+        return MT_ERR_NOMEM;
+    }
+    waiter->task = task;
+    waiter->fd = fd;
+    waiter->events = events;
+    task->fd_waiter = waiter;
+    task->fd_result = MT_OK;
+    task->fd_ready_events = 0;
+    task->fd_in_timer = 0;
+    mt_fd_waiter_add(waiter);
+
+    uint64_t deadline_ns = mt_deadline_from_timeout(timeout_ms);
+    if (mt_timer_push_state(task, deadline_ns, MT_TASK_WAITING_FD) != MT_OK) {
+        mt_fd_waiter_remove(waiter);
+        task->fd_waiter = NULL;
+        mt_fd_free_waiter(waiter);
+        mt_unlock();
+        return MT_ERR_NOMEM;
+    }
+    task->fd_in_timer = 1;
+    mt_ctx_switch(&task->ctx, mt_current_scheduler_ctx());
+
+    int rc = task->fd_result;
+    if (rc == MT_OK) {
+        *ready_events = task->fd_ready_events;
+    }
+    if (task->fd_waiter == waiter) {
+        task->fd_waiter = NULL;
+    }
+    mt_fd_free_waiter(waiter);
+    return rc;
+}
+
+int mt_fd_wait_read(int fd, uint64_t timeout_ms) {
+    int ready = 0;
+    return mt_fd_wait(fd, MT_FD_READ, timeout_ms, &ready);
+}
+
+int mt_fd_wait_write(int fd, uint64_t timeout_ms) {
+    int ready = 0;
+    return mt_fd_wait(fd, MT_FD_WRITE, timeout_ms, &ready);
+}
+
+ssize_t mt_fd_read(int fd, void *buf, size_t len, uint64_t timeout_ms) {
+    if (fd < 0 || (!buf && len > 0)) {
+        return MT_ERR_INVALID;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    uint64_t deadline_ns = mt_deadline_from_timeout(timeout_ms);
+    for (;;) {
+        ssize_t n = read(fd, buf, len);
+        if (n >= 0) {
+            return n;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            return errno == EBADF ? MT_ERR_INVALID : MT_ERR;
+        }
+        uint64_t left_ms = mt_timeout_left_ms(deadline_ns);
+        int rc = mt_fd_wait_read(fd, left_ms);
+        if (rc != MT_OK) {
+            return rc;
+        }
+    }
+}
+
+ssize_t mt_fd_write(int fd, const void *buf, size_t len, uint64_t timeout_ms) {
+    if (fd < 0 || (!buf && len > 0)) {
+        return MT_ERR_INVALID;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    uint64_t deadline_ns = mt_deadline_from_timeout(timeout_ms);
+    const unsigned char *p = (const unsigned char *)buf;
+    size_t total = 0;
+    while (total < len) {
+        ssize_t n = write(fd, p + total, len - total);
+        if (n > 0) {
+            total += (size_t)n;
+            continue;
+        }
+        if (n == 0) {
+            continue;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            return total > 0 ? (ssize_t)total : (errno == EBADF ? MT_ERR_INVALID : MT_ERR);
+        }
+        uint64_t left_ms = mt_timeout_left_ms(deadline_ns);
+        int rc = mt_fd_wait_write(fd, left_ms);
+        if (rc != MT_OK) {
+            return total > 0 ? (ssize_t)total : rc;
+        }
+    }
+    return (ssize_t)total;
+}
+
+int mt_fd_close(int fd) {
+    if (fd < 0) {
+        return MT_ERR_INVALID;
+    }
+    mt_lock();
+    mt_fd_wake_for_close(fd);
+    mt_unlock();
+    return close(fd) == 0 ? MT_OK : (errno == EBADF ? MT_ERR_INVALID : MT_ERR);
+}
+
+int mt_net_listen_tcp(const char *host, const char *port, int backlog) {
+    if (!port || backlog < 0) {
+        return MT_ERR_INVALID;
+    }
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+
+    struct addrinfo *res = NULL;
+    int gai = getaddrinfo(host, port, &hints, &res);
+    if (gai != 0) {
+        return MT_ERR;
+    }
+
+    int listen_fd = -1;
+    for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+        int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) {
+            continue;
+        }
+        int yes = 1;
+        (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+        if (bind(fd, ai->ai_addr, ai->ai_addrlen) == 0 && listen(fd, backlog) == 0) {
+            if (mt_fd_set_nonblocking(fd) == MT_OK) {
+                listen_fd = fd;
+                break;
+            }
+        }
+        close(fd);
+    }
+    freeaddrinfo(res);
+    return listen_fd >= 0 ? listen_fd : MT_ERR;
+}
+
+int mt_net_accept(int listen_fd, struct sockaddr *addr, socklen_t *addrlen,
+                  uint64_t timeout_ms) {
+    if (listen_fd < 0) {
+        return MT_ERR_INVALID;
+    }
+    uint64_t deadline_ns = mt_deadline_from_timeout(timeout_ms);
+    for (;;) {
+        int fd = accept(listen_fd, addr, addrlen);
+        if (fd >= 0) {
+            if (mt_fd_set_nonblocking(fd) != MT_OK) {
+                close(fd);
+                return MT_ERR;
+            }
+            return fd;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            return errno == EBADF ? MT_ERR_INVALID : MT_ERR;
+        }
+        uint64_t left_ms = mt_timeout_left_ms(deadline_ns);
+        int rc = mt_fd_wait_read(listen_fd, left_ms);
+        if (rc != MT_OK) {
+            return rc;
+        }
+    }
+}
+
+ssize_t mt_net_read(int fd, void *buf, size_t len, uint64_t timeout_ms) {
+    return mt_fd_read(fd, buf, len, timeout_ms);
+}
+
+ssize_t mt_net_write(int fd, const void *buf, size_t len, uint64_t timeout_ms) {
+    return mt_fd_write(fd, buf, len, timeout_ms);
+}
+
+int mt_net_close(int fd) {
+    return mt_fd_close(fd);
+}
+#else
+int mt_fd_set_nonblocking(int fd) {
+    return fd < 0 ? MT_ERR_INVALID : MT_ERR_STATE;
+}
+
+int mt_fd_wait(int fd, int events, uint64_t timeout_ms, int *ready_events) {
+    (void)events;
+    (void)timeout_ms;
+    if (ready_events) {
+        *ready_events = 0;
+    }
+    return fd < 0 || !ready_events ? MT_ERR_INVALID : MT_ERR_STATE;
+}
+
+int mt_fd_wait_read(int fd, uint64_t timeout_ms) {
+    int ready = 0;
+    return mt_fd_wait(fd, MT_FD_READ, timeout_ms, &ready);
+}
+
+int mt_fd_wait_write(int fd, uint64_t timeout_ms) {
+    int ready = 0;
+    return mt_fd_wait(fd, MT_FD_WRITE, timeout_ms, &ready);
+}
+
+ssize_t mt_fd_read(int fd, void *buf, size_t len, uint64_t timeout_ms) {
+    (void)buf;
+    (void)len;
+    (void)timeout_ms;
+    return fd < 0 ? MT_ERR_INVALID : MT_ERR_STATE;
+}
+
+ssize_t mt_fd_write(int fd, const void *buf, size_t len, uint64_t timeout_ms) {
+    (void)buf;
+    (void)len;
+    (void)timeout_ms;
+    return fd < 0 ? MT_ERR_INVALID : MT_ERR_STATE;
+}
+
+int mt_fd_close(int fd) {
+    return fd < 0 ? MT_ERR_INVALID : MT_ERR_STATE;
+}
+
+int mt_net_listen_tcp(const char *host, const char *port, int backlog) {
+    (void)host;
+    (void)backlog;
+    return port ? MT_ERR_STATE : MT_ERR_INVALID;
+}
+
+int mt_net_accept(int listen_fd, struct sockaddr *addr, socklen_t *addrlen,
+                  uint64_t timeout_ms) {
+    (void)addr;
+    (void)addrlen;
+    (void)timeout_ms;
+    return listen_fd < 0 ? MT_ERR_INVALID : MT_ERR_STATE;
+}
+
+ssize_t mt_net_read(int fd, void *buf, size_t len, uint64_t timeout_ms) {
+    return mt_fd_read(fd, buf, len, timeout_ms);
+}
+
+ssize_t mt_net_write(int fd, const void *buf, size_t len, uint64_t timeout_ms) {
+    return mt_fd_write(fd, buf, len, timeout_ms);
+}
+
+int mt_net_close(int fd) {
+    return mt_fd_close(fd);
+}
+#endif
 
 void mt_shutdown(void) {
     if (mt_current_task()) {

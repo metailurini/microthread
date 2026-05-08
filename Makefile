@@ -29,7 +29,7 @@ BUILD_DIR := build
 LIB := $(BUILD_DIR)/libmicrothread.a
 OBJ := $(SRC:%.c=$(BUILD_DIR)/%.o) $(ASM_SRC:%.S=$(BUILD_DIR)/%.o)
 
-.PHONY: all test stress sanitize tsan valgrind guard-test guard-disabled-test example examples sleep-example channels-example handles-example select-example try-example select-advanced-example clean
+.PHONY: all test stress sanitize tsan valgrind guard-test guard-disabled-test example examples sleep-example channels-example handles-example select-example try-example select-advanced-example echo-server-example clean
 
 all: $(LIB)
 
@@ -153,6 +153,10 @@ $(BUILD_DIR)/select_advanced$(EXE): examples/select_advanced.c $(LIB)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
 
+$(BUILD_DIR)/echo_server$(EXE): examples/echo_server.c $(LIB)
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
+
 test: $(BUILD_DIR)/test_v0_1$(EXE) $(BUILD_DIR)/test_v0_2$(EXE) $(BUILD_DIR)/test_v0_3$(EXE) $(BUILD_DIR)/test_v0_4$(EXE) $(BUILD_DIR)/test_v0_5$(EXE) $(BUILD_DIR)/test_v0_6$(EXE) $(BUILD_DIR)/test_guard_disabled$(EXE)
 	$(BUILD_DIR)/test_v0_1$(EXE)
 	$(BUILD_DIR)/test_v0_2$(EXE)
@@ -226,6 +230,9 @@ try-example: $(BUILD_DIR)/try_nonblocking$(EXE)
 	$<
 
 select-advanced-example: $(BUILD_DIR)/select_advanced$(EXE)
+	$<
+
+echo-server-example: $(BUILD_DIR)/echo_server$(EXE)
 	$<
 
 clean:

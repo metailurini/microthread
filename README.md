@@ -1,6 +1,6 @@
 # MicroThread
 
-MicroThread is a small stackful user-space threading runtime for C. It gives you lightweight tasks, cooperative scheduling, sleeps/timers, task handles, channels, `select`-style waiting, and an optional multi-worker runtime backed by OS threads.
+MicroThread is a small stackful user-space threading runtime for C. It gives you lightweight tasks, cooperative scheduling, sleeps/timers, task handles, channels, `select`-style waiting, nonblocking file-descriptor waits, and an optional multi-worker runtime backed by OS threads.
 
 The public API lives in:
 
@@ -30,9 +30,11 @@ This is useful for learning and experimenting with runtime internals: scheduling
 
 ## What MicroThread is not
 
-MicroThread is not a networking framework, async I/O framework, or preemptive thread library. It does not replace pthreads. It runs on top of OS threads and schedules MicroThread tasks in user space.
+MicroThread is not an HTTP framework or preemptive thread library. It does not replace pthreads. It runs on top of OS threads and schedules MicroThread tasks in user space.
 
 A running microthread is cooperative: it keeps its current OS worker until it yields, sleeps, blocks on a runtime primitive, or returns.
+
+Do not call blocking OS I/O directly inside a microthread unless you intentionally want to block that OS worker. Use the `mt_fd_*` / `mt_net_*` helpers for descriptor readiness I/O.
 
 ## Quick example
 
@@ -87,6 +89,8 @@ make examples
 - `mt_select()` over channel send/receive cases, default, and timeout.
 - Task handles, `mt_join()`, task status queries, and explicit handle release.
 - Cooperative cancellation through `mt_task_cancel()` and `mt_task_cancelled()`.
+- Nonblocking fd readiness waits with `mt_fd_wait_read()`, `mt_fd_wait_write()`, and `mt_fd_wait()`.
+- Nonblocking fd read/write helpers and small TCP listen/accept wrappers.
 - Guarded stacks on supported Unix-like platforms, with an opt-out build flag.
 - macOS assembly context backend to avoid Apple’s deprecated `ucontext` APIs.
 - Unix `ucontext` backend for non-macOS Unix-like platforms.
@@ -313,6 +317,53 @@ Rules:
 - Otherwise, the current microthread parks until a channel case becomes ready, the timeout expires, cancellation wakes it, shutdown occurs, or the involved channel is closed/destroyed.
 - When one case wins, the runtime unregisters the losing cases so the same task is not woken twice.
 
+## File-descriptor and socket I/O
+
+MicroThread includes a v0.7 I/O foundation for descriptors and sockets. These APIs are lower-level than HTTP: they let a microthread park on descriptor readiness without parking the whole OS worker thread.
+
+Core APIs:
+
+```c
+mt_fd_set_nonblocking(fd);
+mt_fd_wait_read(fd, timeout_ms);
+mt_fd_wait_write(fd, timeout_ms);
+mt_fd_wait(fd, MT_FD_READ | MT_FD_WRITE, timeout_ms, &ready_events);
+
+mt_fd_read(fd, buf, len, timeout_ms);
+mt_fd_write(fd, buf, len, timeout_ms);
+mt_fd_close(fd);
+```
+
+Socket convenience APIs:
+
+```c
+int listen_fd = mt_net_listen_tcp("127.0.0.1", "8080", 128);
+int client_fd = mt_net_accept(listen_fd, NULL, NULL, 5000);
+```
+
+Current implementation notes:
+
+- The public semantics are readiness-based and nonblocking for the current microthread.
+- The initial backend is a portable `poll()` backend on Unix-like platforms.
+- `timeout_ms == 0` means a nonblocking readiness poll.
+- `MT_ERR_TIMEOUT`, `MT_ERR_CANCELLED`, `MT_ERR_CLOSED`, and `MT_ERR_INVALID` are distinct statuses.
+- `mt_fd_close(fd)` closes the descriptor and wakes MicroThread waiters for that fd.
+- Raw `close(fd)` while a microthread is waiting on the same fd is unsupported; use `mt_fd_close(fd)`.
+
+This is enough to build echo-server-style examples. Full HTTP parsing, routing, request limits, and production server behavior are intentionally separate future layers.
+
+Build the echo server example with:
+
+```sh
+make build/echo_server
+```
+
+Run it with:
+
+```sh
+./build/echo_server 8080
+```
+
 ## Task handles and cancellation
 
 `mt_go_handle()` creates a task and returns a user-owned handle. Use the handle to join, cancel, or query the task:
@@ -359,12 +410,13 @@ task handles
 join
 cooperative cancellation
 multi-worker execution
+fd/socket readiness I/O
 ```
 
 Out of scope for now:
 
 ```text
-network/socket I/O
+HTTP server framework
 preemptive scheduling
 work stealing
 async file I/O
