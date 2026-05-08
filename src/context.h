@@ -11,6 +11,32 @@ typedef struct gt_context {
     void *data;
     int owns_fiber;
 } gt_context_t;
+#elif defined(__APPLE__) && (defined(__x86_64__) || defined(__aarch64__))
+typedef struct gt_context {
+#if defined(__x86_64__)
+    void *rsp;
+    void *r15;
+    void *r14;
+    void *r13;
+    void *r12;
+    void *rbx;
+    void *rbp;
+#else
+    void *sp;
+    void *x19;
+    void *x20;
+    void *x21;
+    void *x22;
+    void *x23;
+    void *x24;
+    void *x25;
+    void *x26;
+    void *x27;
+    void *x28;
+    void *fp;
+    void *lr;
+#endif
+} gt_context_t;
 #else
 #include <ucontext.h>
 typedef struct gt_context {

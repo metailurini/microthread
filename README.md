@@ -28,7 +28,8 @@ Implemented features:
 - guarded stack mappings on Unix-like platforms using `mmap`/`mprotect`
 - Windows Fiber stack sizing through `CreateFiber`
 - timer heap for sleeping tasks
-- Unix `ucontext` backend
+- Unix `ucontext` backend for non-macOS Unix-like platforms
+- macOS x86_64/aarch64 assembly context backend, avoiding deprecated Apple `ucontext` APIs
 - Windows Fibers backend
 - basic, sleep, channel, handle, select, nonblocking-channel, and advanced-select examples
 - comprehensive v0.1/v0.2/v0.3/v0.4/v0.5 test suites mapped to the versioned test plans
@@ -182,6 +183,6 @@ Task handles are user-owned. Release each handle with `gt_task_handle_release()`
 
 `gt_sleep_ms(0)` is documented as yield-like behavior. Calling `gt_sleep_ms()` outside a running green thread is a safe no-op.
 
-The scheduler is portable C. Platform-specific context switching is isolated behind `src/context.h` so later versions can replace `ucontext` or Fibers with assembly or a proven context library.
+The scheduler is portable C. Platform-specific context switching is isolated behind `src/context.h`. Non-macOS Unix-like builds currently use `ucontext`, macOS x86_64/aarch64 builds use the assembly backend, and Windows builds use Fibers.
 
 For platforms or embedders that cannot use guard pages, build with `-DGT_DISABLE_GUARD_PAGES`. In that mode, the runtime still supports stackful green threads and debug metadata reports a guard size of zero, but stack overflow protection is intentionally unavailable.

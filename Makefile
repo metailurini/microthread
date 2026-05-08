@@ -4,13 +4,20 @@ CPPFLAGS ?= -Iinclude
 TEST_CPPFLAGS := $(CPPFLAGS) -DGT_TESTING
 
 SRC := src/gt.c
+ASM_SRC :=
 
 ifeq ($(OS),Windows_NT)
 SRC += src/context_win_fiber.c
 EXE := .exe
 THREAD_FLAGS :=
 else
+UNAME_S := $(shell uname -s 2>/dev/null || echo unknown)
+ifeq ($(UNAME_S),Darwin)
+SRC += src/context_asm.c
+ASM_SRC += src/context_asm_macos.S
+else
 SRC += src/context_ucontext.c
+endif
 EXE :=
 THREAD_FLAGS := -pthread
 endif
@@ -20,7 +27,7 @@ CFLAGS += $(THREAD_FLAGS)
 
 BUILD_DIR := build
 LIB := $(BUILD_DIR)/libgt.a
-OBJ := $(SRC:%.c=$(BUILD_DIR)/%.o)
+OBJ := $(SRC:%.c=$(BUILD_DIR)/%.o) $(ASM_SRC:%.S=$(BUILD_DIR)/%.o)
 
 .PHONY: all test stress sanitize tsan valgrind guard-test guard-disabled-test example examples sleep-example channels-example handles-example select-example try-example select-advanced-example clean
 
@@ -30,89 +37,93 @@ $(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/%.o: %.S
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
 $(LIB): $(OBJ)
 	@mkdir -p $(dir $@)
 	ar rcs $@ $^
 
-$(BUILD_DIR)/test_v0_1$(EXE): tests/test_v0_1.c $(SRC)
+$(BUILD_DIR)/test_v0_1$(EXE): tests/test_v0_1.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_1_full$(EXE): tests/test_v0_1.c $(SRC)
+$(BUILD_DIR)/test_v0_1_full$(EXE): tests/test_v0_1.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DGT_FULL_STRESS $(CFLAGS) $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -DGT_FULL_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_1_asan$(EXE): tests/test_v0_1.c $(SRC)
+$(BUILD_DIR)/test_v0_1_asan$(EXE): tests/test_v0_1.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_2$(EXE): tests/test_v0_2.c $(SRC)
+$(BUILD_DIR)/test_v0_2$(EXE): tests/test_v0_2.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_2_full$(EXE): tests/test_v0_2.c $(SRC)
+$(BUILD_DIR)/test_v0_2_full$(EXE): tests/test_v0_2.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DGT_FULL_STRESS $(CFLAGS) $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -DGT_FULL_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_2_asan$(EXE): tests/test_v0_2.c $(SRC)
+$(BUILD_DIR)/test_v0_2_asan$(EXE): tests/test_v0_2.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_3$(EXE): tests/test_v0_3.c $(SRC)
+$(BUILD_DIR)/test_v0_3$(EXE): tests/test_v0_3.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_3_full$(EXE): tests/test_v0_3.c $(SRC)
+$(BUILD_DIR)/test_v0_3_full$(EXE): tests/test_v0_3.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DGT_FULL_STRESS $(CFLAGS) $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -DGT_FULL_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_3_asan$(EXE): tests/test_v0_3.c $(SRC)
+$(BUILD_DIR)/test_v0_3_asan$(EXE): tests/test_v0_3.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_4$(EXE): tests/test_v0_4.c $(SRC)
+$(BUILD_DIR)/test_v0_4$(EXE): tests/test_v0_4.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_4_full$(EXE): tests/test_v0_4.c $(SRC)
+$(BUILD_DIR)/test_v0_4_full$(EXE): tests/test_v0_4.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DGT_FULL_STRESS $(CFLAGS) $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -DGT_FULL_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_4_asan$(EXE): tests/test_v0_4.c $(SRC)
+$(BUILD_DIR)/test_v0_4_asan$(EXE): tests/test_v0_4.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_5$(EXE): tests/test_v0_5.c $(SRC)
+$(BUILD_DIR)/test_v0_5$(EXE): tests/test_v0_5.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_5_asan$(EXE): tests/test_v0_5.c $(SRC)
+$(BUILD_DIR)/test_v0_5_asan$(EXE): tests/test_v0_5.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_6$(EXE): tests/test_v0_6.c $(SRC)
+$(BUILD_DIR)/test_v0_6$(EXE): tests/test_v0_6.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_6_asan$(EXE): tests/test_v0_6.c $(SRC)
+$(BUILD_DIR)/test_v0_6_asan$(EXE): tests/test_v0_6.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_6_tsan$(EXE): tests/test_v0_6.c $(SRC)
+$(BUILD_DIR)/test_v0_6_tsan$(EXE): tests/test_v0_6.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -fsanitize=thread -g -O1 $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -fsanitize=thread -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_guard_overflow$(EXE): tests/test_guard_overflow.c $(SRC)
+$(BUILD_DIR)/test_guard_overflow$(EXE): tests/test_guard_overflow.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_guard_disabled$(EXE): tests/test_guard_disabled.c $(SRC)
+$(BUILD_DIR)/test_guard_disabled$(EXE): tests/test_guard_disabled.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DGT_DISABLE_GUARD_PAGES $(CFLAGS) $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -DGT_DISABLE_GUARD_PAGES $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
-$(BUILD_DIR)/test_v0_4_guard_disabled$(EXE): tests/test_v0_4.c $(SRC)
+$(BUILD_DIR)/test_v0_4_guard_disabled$(EXE): tests/test_v0_4.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DGT_DISABLE_GUARD_PAGES $(CFLAGS) $(SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -DGT_DISABLE_GUARD_PAGES $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
 $(BUILD_DIR)/basic$(EXE): examples/basic.c $(LIB)
 	@mkdir -p $(dir $@)
