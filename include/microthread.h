@@ -117,6 +117,14 @@ ssize_t mt_fd_read(int fd, void *buf, size_t len, uint64_t timeout_ms);
 ssize_t mt_fd_write(int fd, const void *buf, size_t len, uint64_t timeout_ms);
 int     mt_fd_close(int fd);
 
+/*
+ * v0.7 fd waits use finite millisecond timeouts. A timeout of 0 performs an
+ * immediate readiness check. Use a very large timeout when a practical
+ * "wait forever" is desired. Descriptors waited on by MicroThread should be
+ * closed with mt_fd_close()/mt_net_close(), not raw close(), so waiters can be
+ * woken and descriptor-reuse guards stay valid.
+ */
+
 int     mt_net_listen_tcp(const char *host, const char *port, int backlog);
 int     mt_net_accept(int listen_fd, struct sockaddr *addr, socklen_t *addrlen,
                       uint64_t timeout_ms);
@@ -143,6 +151,9 @@ void   mt_test_fail_next_channel_alloc(void);
 void   mt_test_fail_next_channel_buffer_alloc(void);
 void   mt_test_fail_next_handle_alloc(void);
 void   mt_test_fail_next_select_alloc(void);
+void   mt_test_fail_next_fd_waiter_alloc(void);
+void   mt_test_fail_next_io_backend_init(void);
+void   mt_test_fail_next_io_backend_register(void);
 void   mt_test_reset_faults(void);
 int    mt_test_run_until_blocked(void);
 void  *mt_test_current_stack_base(void);
@@ -162,6 +173,12 @@ void   mt_test_handle_memory_counters(size_t *handle_allocs,
                                       size_t *handle_frees);
 void   mt_test_select_memory_counters(size_t *select_allocs,
                                       size_t *select_frees);
+void   mt_test_io_memory_counters(size_t *fd_waiter_allocs,
+                                  size_t *fd_waiter_frees,
+                                  size_t *backend_inits,
+                                  size_t *backend_shutdowns,
+                                  size_t *backend_registers,
+                                  size_t *backend_unregisters);
 #endif
 
 #ifdef __cplusplus

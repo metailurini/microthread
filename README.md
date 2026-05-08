@@ -346,11 +346,13 @@ Current implementation notes:
 
 - The public semantics are readiness-based and nonblocking for the current microthread.
 - The runtime selects a native readiness backend when available: `epoll` on Linux, `kqueue` on macOS/BSD, and `poll` as the portable Unix fallback.
+- Build with `-DMT_FORCE_POLL_BACKEND`, or run `make force-poll-build`, to force the portable `poll` backend on platforms that would normally use `epoll` or `kqueue`.
 - `mt_io_backend_name()` reports the active backend as `"epoll"`, `"kqueue"`, `"poll"`, `"none"`, or `"unsupported"`.
 - Backend resources are initialized once with the runtime and cleaned up by `mt_shutdown()`.
-- `timeout_ms == 0` means a nonblocking readiness poll.
+- `timeout_ms == 0` means a nonblocking readiness poll. The fd APIs use finite millisecond timeouts; pass a very large value when a practical indefinite wait is desired.
 - `MT_ERR_TIMEOUT`, `MT_ERR_CANCELLED`, `MT_ERR_CLOSED`, and `MT_ERR_INVALID` are distinct statuses.
 - `mt_fd_close(fd)` closes the descriptor and wakes MicroThread waiters for that fd.
+- `mt_net_write()` avoids `SIGPIPE` where the platform provides `MSG_NOSIGNAL` or `SO_NOSIGPIPE`; `mt_fd_write()` is the lower-level descriptor helper and may inherit normal platform `write()` behavior.
 - A single active waiter per descriptor is supported; overlapping waits on the same fd return `MT_ERR_STATE`.
 - Descriptor reuse is guarded for descriptors closed through `mt_fd_close(fd)`. Raw `close(fd)` while a microthread is waiting on the same fd is unsupported; use `mt_fd_close(fd)`.
 
