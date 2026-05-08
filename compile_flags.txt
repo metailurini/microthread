@@ -1,1 +1,2 @@
 -I./include
+-DGT_DISABLE_GUARD_PAGES

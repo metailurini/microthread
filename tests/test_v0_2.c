@@ -2,6 +2,9 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 
+#ifndef GT_TESTING
+#define GT_TESTING
+#endif
 #include "gt.h"
 
 #include <assert.h>

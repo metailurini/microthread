@@ -1,3 +1,6 @@
+#ifndef GT_TESTING
+#define GT_TESTING
+#endif
 #include "gt.h"
 
 #include <assert.h>
