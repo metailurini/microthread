@@ -158,6 +158,7 @@ tests/v0_3_test_plan.md
 tests/v0_4_test_plan.md
 tests/v0_5_test_plan.md
 tests/v0_6_test_plan.md
+tests/v0_7_test_plan.md
 ```
 
 ## Examples
