@@ -30,7 +30,7 @@ BUILD_DIR := build
 LIB := $(BUILD_DIR)/libmicrothread.a
 OBJ := $(SRC:%.c=$(BUILD_DIR)/%.o) $(ASM_SRC:%.S=$(BUILD_DIR)/%.o)
 
-.PHONY: all test stress sanitize tsan valgrind guard-test guard-disabled-test force-poll-build example examples sleep-example channels-example handles-example select-example try-example select-advanced-example echo-server-example clean
+.PHONY: all test stress io-stress sanitize tsan io-tsan valgrind guard-test guard-disabled-test force-poll-build example examples sleep-example channels-example handles-example select-example try-example select-advanced-example echo-server-example clean
 
 all: $(LIB)
 
@@ -122,6 +122,14 @@ $(BUILD_DIR)/test_v0_7_poll$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
 	$(CC) $(TEST_CPPFLAGS) -DMT_FORCE_POLL_BACKEND $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
+$(BUILD_DIR)/test_v0_7_full$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
+	@mkdir -p $(dir $@)
+	$(CC) $(TEST_CPPFLAGS) -DMT_IO_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+
+$(BUILD_DIR)/test_v0_7_poll_full$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
+	@mkdir -p $(dir $@)
+	$(CC) $(TEST_CPPFLAGS) -DMT_FORCE_POLL_BACKEND -DMT_IO_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+
 $(BUILD_DIR)/test_v0_7_asan$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
 	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
@@ -129,6 +137,14 @@ $(BUILD_DIR)/test_v0_7_asan$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
 $(BUILD_DIR)/test_v0_7_poll_asan$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
 	$(CC) $(TEST_CPPFLAGS) -DMT_FORCE_POLL_BACKEND -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+
+$(BUILD_DIR)/test_v0_7_tsan$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
+	@mkdir -p $(dir $@)
+	$(CC) $(TEST_CPPFLAGS) -fsanitize=thread -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+
+$(BUILD_DIR)/test_v0_7_poll_tsan$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
+	@mkdir -p $(dir $@)
+	$(CC) $(TEST_CPPFLAGS) -DMT_FORCE_POLL_BACKEND -fsanitize=thread -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
 $(BUILD_DIR)/libmicrothread_poll.a: $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@) $(BUILD_DIR)/src
@@ -205,6 +221,10 @@ stress: $(BUILD_DIR)/test_v0_1_full$(EXE) $(BUILD_DIR)/test_v0_2_full$(EXE) $(BU
 	$(BUILD_DIR)/test_v0_3_full$(EXE)
 	$(BUILD_DIR)/test_v0_4_full$(EXE)
 
+io-stress: $(BUILD_DIR)/test_v0_7_full$(EXE) $(BUILD_DIR)/test_v0_7_poll_full$(EXE)
+	$(BUILD_DIR)/test_v0_7_full$(EXE)
+	$(BUILD_DIR)/test_v0_7_poll_full$(EXE)
+
 sanitize: $(BUILD_DIR)/test_v0_1_asan$(EXE) $(BUILD_DIR)/test_v0_2_asan$(EXE) $(BUILD_DIR)/test_v0_3_asan$(EXE) $(BUILD_DIR)/test_v0_4_asan$(EXE) $(BUILD_DIR)/test_v0_5_asan$(EXE) $(BUILD_DIR)/test_v0_6_asan$(EXE) $(BUILD_DIR)/test_v0_7_asan$(EXE) $(BUILD_DIR)/test_v0_7_poll_asan$(EXE)
 	$(BUILD_DIR)/test_v0_1_asan$(EXE)
 	$(BUILD_DIR)/test_v0_2_asan$(EXE)
@@ -217,6 +237,14 @@ sanitize: $(BUILD_DIR)/test_v0_1_asan$(EXE) $(BUILD_DIR)/test_v0_2_asan$(EXE) $(
 
 tsan: $(BUILD_DIR)/test_v0_6_tsan$(EXE)
 	$(BUILD_DIR)/test_v0_6_tsan$(EXE)
+
+ifeq ($(UNAME_S),Darwin)
+io-tsan: $(BUILD_DIR)/test_v0_7_tsan$(EXE)
+	$(BUILD_DIR)/test_v0_7_tsan$(EXE)
+else
+io-tsan:
+	@echo "v0.7 ThreadSanitizer runtime is skipped with the ucontext backend; run on Darwin asm backend or use ASan via make sanitize"
+endif
 
 valgrind: $(BUILD_DIR)/test_v0_1$(EXE) $(BUILD_DIR)/test_v0_2$(EXE) $(BUILD_DIR)/test_v0_3$(EXE) $(BUILD_DIR)/test_v0_4$(EXE) $(BUILD_DIR)/test_v0_5$(EXE) $(BUILD_DIR)/test_v0_6$(EXE) $(BUILD_DIR)/test_v0_7$(EXE) $(BUILD_DIR)/test_v0_7_poll$(EXE)
 	@if command -v valgrind >/dev/null 2>&1; then \

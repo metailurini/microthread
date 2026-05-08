@@ -138,6 +138,17 @@ Run the v0.6 ThreadSanitizer suite where supported:
 make tsan
 ```
 
+Run the v0.7 I/O ThreadSanitizer target where supported:
+
+```sh
+make io-tsan
+```
+
+On non-macOS Unix builds, the current context backend uses `ucontext`, which is
+not reliable under ThreadSanitizer. In that configuration `make io-tsan` prints a
+skip message. Use `make sanitize` for ASan/UBSan coverage, and run `make io-tsan`
+on the macOS assembly backend when available.
+
 Run Valgrind checks when Valgrind is installed:
 
 ```sh
@@ -148,6 +159,13 @@ Run the larger practical stress profile:
 
 ```sh
 make stress
+```
+
+Run the larger v0.7 fd/socket I/O stress profile, including native and forced
+`poll` backends:
+
+```sh
+make io-stress
 ```
 
 Run guard-page specific checks:
