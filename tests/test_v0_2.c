@@ -2,10 +2,10 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 
-#ifndef GT_TESTING
-#define GT_TESTING
+#ifndef MT_TESTING
+#define MT_TESTING
 #endif
-#include "gt.h"
+#include "microthread.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -25,14 +25,14 @@
 #define MS_TO_NS UINT64_C(1000000)
 
 #if defined(__SANITIZE_ADDRESS__)
-#define GT_TEST_ASAN 1
+#define MT_TEST_ASAN 1
 #elif defined(__has_feature)
 #if __has_feature(address_sanitizer)
-#define GT_TEST_ASAN 1
+#define MT_TEST_ASAN 1
 #endif
 #endif
 
-#if defined(GT_FULL_STRESS)
+#if defined(MT_FULL_STRESS)
 enum {
     V02_MANY_SLEEPERS = 5000,
     V02_SLEEP_YIELD_TASKS = 200,
@@ -96,7 +96,7 @@ static void reset_globals(void) {
     memset(g_times, 0, sizeof(g_times));
     g_event_count = 0;
     g_escaped_stack_pointer = 0;
-    gt_test_reset_faults();
+    mt_test_reset_faults();
 }
 
 static void record_event(int event) {
@@ -105,10 +105,10 @@ static void record_event(int event) {
 }
 
 static void expect_clean_runtime(void) {
-    assert(gt_debug_runnable_count() == 0);
-    assert(gt_debug_sleeping_task_count() == 0);
-    assert(gt_debug_live_task_count() == 0);
-    assert(gt_debug_current_task_id() == 0);
+    assert(mt_debug_runnable_count() == 0);
+    assert(mt_debug_sleeping_task_count() == 0);
+    assert(mt_debug_live_task_count() == 0);
+    assert(mt_debug_current_task_id() == 0);
 }
 
 typedef struct memory_counters {
@@ -122,7 +122,7 @@ typedef struct memory_counters {
 
 static memory_counters_t memory_snapshot(void) {
     memory_counters_t c;
-    gt_test_memory_counters(&c.task_allocs,
+    mt_test_memory_counters(&c.task_allocs,
                             &c.task_frees,
                             &c.stack_allocs,
                             &c.stack_frees,
@@ -139,8 +139,8 @@ static void expect_memory_balanced_since(memory_counters_t before) {
 }
 
 static void teardown(void) {
-    gt_shutdown();
-    gt_test_reset_faults();
+    mt_shutdown();
+    mt_test_reset_faults();
 }
 
 static void simple_inc(void *arg) {
@@ -151,33 +151,33 @@ static void simple_inc(void *arg) {
 static void yield_only_a(void *arg) {
     (void)arg;
     record_event(1);
-    gt_yield();
+    mt_yield();
     record_event(3);
 }
 
 static void yield_only_b(void *arg) {
     (void)arg;
     record_event(2);
-    gt_yield();
+    mt_yield();
     record_event(4);
 }
 
 static void stack_probe_task(void *arg) {
     size_t *sizes = (size_t *)arg;
     int local = 123;
-    void *base = gt_test_current_stack_base();
-    size_t size = gt_test_current_stack_size();
-    size_t guard = gt_test_current_stack_guard_size();
+    void *base = mt_test_current_stack_base();
+    size_t size = mt_test_current_stack_size();
+    size_t guard = mt_test_current_stack_guard_size();
     sizes[0] = size;
     sizes[1] = guard;
-#if !defined(_WIN32) && !defined(GT_TEST_ASAN)
+#if !defined(_WIN32) && !defined(MT_TEST_ASAN)
     assert(base != NULL);
-    assert(size >= GT_MIN_STACK_SIZE);
+    assert(size >= MT_MIN_STACK_SIZE);
     assert((char *)&local >= (char *)base);
     assert((char *)&local < (char *)base + size);
 #endif
-    gt_yield();
-#if !defined(_WIN32) && !defined(GT_TEST_ASAN)
+    mt_yield();
+#if !defined(_WIN32) && !defined(MT_TEST_ASAN)
     assert((char *)&local >= (char *)base);
     assert((char *)&local < (char *)base + size);
 #endif
@@ -187,7 +187,7 @@ static void stack_probe_task(void *arg) {
 static void minimum_stack_task(void *arg) {
     int *value = (int *)arg;
     int local = 7;
-    gt_yield();
+    mt_yield();
     *value = local;
 }
 
@@ -202,7 +202,7 @@ static void mixed_stack_task(void *arg) {
     int local = cfg->id;
     for (int i = 0; i < cfg->iterations; ++i) {
         local += 1;
-        gt_yield();
+        mt_yield();
     }
     *cfg->sum += local;
 }
@@ -210,7 +210,7 @@ static void mixed_stack_task(void *arg) {
 static void sleep_zero_a(void *arg) {
     (void)arg;
     record_event(1);
-    gt_sleep_ms(0);
+    mt_sleep_ms(0);
     record_event(3);
 }
 
@@ -222,7 +222,7 @@ static void sleep_zero_b(void *arg) {
 static void timed_sleep_task(void *arg) {
     uint64_t *times = (uint64_t *)arg;
     times[0] = now_ns();
-    gt_sleep_ms(20);
+    mt_sleep_ms(20);
     times[1] = now_ns();
 }
 
@@ -230,14 +230,14 @@ static void multi_sleep_task(void *arg) {
     uint64_t *times = (uint64_t *)arg;
     times[0] = now_ns();
     for (int i = 0; i < 5; ++i) {
-        gt_sleep_ms(5);
+        mt_sleep_ms(5);
     }
     times[1] = now_ns();
 }
 
 static void same_duration_sleep_task(void *arg) {
     int *counter = (int *)arg;
-    gt_sleep_ms(10);
+    mt_sleep_ms(10);
     (*counter)++;
 }
 
@@ -248,7 +248,7 @@ typedef struct sleep_order_arg {
 
 static void sleep_order_task(void *arg) {
     sleep_order_arg_t *cfg = (sleep_order_arg_t *)arg;
-    gt_sleep_ms(cfg->ms);
+    mt_sleep_ms(cfg->ms);
     record_event(cfg->id);
     if ((size_t)cfg->id < ARRAY_LEN(g_times)) {
         g_times[cfg->id] = now_ns();
@@ -257,28 +257,28 @@ static void sleep_order_task(void *arg) {
 
 static void sleeping_count_sleeper(void *arg) {
     (void)arg;
-    gt_sleep_ms(20);
+    mt_sleep_ms(20);
     record_event(2);
 }
 
 static void sleeping_count_observer(void *arg) {
     (void)arg;
-    gt_yield();
-    assert(gt_debug_sleeping_task_count() == 1);
+    mt_yield();
+    assert(mt_debug_sleeping_task_count() == 1);
     record_event(1);
 }
 
 static void ready_while_sleeping_a(void *arg) {
     (void)arg;
     record_event(1);
-    gt_sleep_ms(30);
+    mt_sleep_ms(30);
     record_event(4);
 }
 
 static void ready_while_sleeping_b(void *arg) {
     (void)arg;
     record_event(2);
-    gt_yield();
+    mt_yield();
     record_event(3);
 }
 
@@ -290,40 +290,40 @@ static void child_records(void *arg) {
 static void parent_create_then_sleep(void *arg) {
     int *child_event = (int *)arg;
     record_event(1);
-    assert(gt_go(child_records, child_event) > 0);
-    gt_sleep_ms(10);
+    assert(mt_go(child_records, child_event) > 0);
+    mt_sleep_ms(10);
     record_event(3);
 }
 
 static void parent_create_after_wake(void *arg) {
     int *child_event = (int *)arg;
     record_event(1);
-    gt_sleep_ms(5);
-    assert(gt_go(child_records, child_event) > 0);
+    mt_sleep_ms(5);
+    assert(mt_go(child_records, child_event) > 0);
     record_event(2);
 }
 
 static void sleep_then_yield_task(void *arg) {
     (void)arg;
     record_event(1);
-    gt_sleep_ms(5);
+    mt_sleep_ms(5);
     record_event(2);
-    gt_yield();
+    mt_yield();
     record_event(4);
 }
 
 static void sleep_then_yield_peer(void *arg) {
     (void)arg;
-    gt_yield();
+    mt_yield();
     record_event(3);
 }
 
 static void yield_then_sleep_task(void *arg) {
     (void)arg;
     record_event(1);
-    gt_yield();
+    mt_yield();
     record_event(3);
-    gt_sleep_ms(5);
+    mt_sleep_ms(5);
     record_event(4);
 }
 
@@ -334,16 +334,16 @@ static void yield_then_sleep_peer(void *arg) {
 
 static void shutdown_from_woken_task(void *arg) {
     (void)arg;
-    gt_sleep_ms(2);
-    gt_shutdown();
+    mt_sleep_ms(2);
+    mt_shutdown();
     record_event(1);
 }
 
 static void timer_alloc_failure_task(void *arg) {
     uint64_t *times = (uint64_t *)arg;
     times[0] = now_ns();
-    gt_test_fail_next_timer_alloc();
-    gt_sleep_ms(5);
+    mt_test_fail_next_timer_alloc();
+    mt_sleep_ms(5);
     times[1] = now_ns();
     record_event(1);
 }
@@ -355,8 +355,8 @@ static void timer_alloc_failure_peer(void *arg) {
 
 static void clock_failure_sleep_task(void *arg) {
     int *value = (int *)arg;
-    gt_test_fail_next_clock_read();
-    gt_sleep_ms(1);
+    mt_test_fail_next_clock_read();
+    mt_sleep_ms(1);
     *value = 99;
 }
 
@@ -419,9 +419,9 @@ static void churn_task(void *arg) {
     for (int i = 0; i < cfg->iterations; ++i) {
         x = x * 1103515245u + 12345u;
         if (i & 1) {
-            gt_yield();
+            mt_yield();
         }
-        gt_sleep_ms((x >> 16u) % 4u);
+        mt_sleep_ms((x >> 16u) % 4u);
     }
     (*cfg->done)++;
 }
@@ -429,18 +429,18 @@ static void churn_task(void *arg) {
 static void sleep_yield_cycle_task(void *arg) {
     int *done = (int *)arg;
     for (int i = 0; i < V02_SLEEP_YIELD_ITERS; ++i) {
-        gt_yield();
-        gt_sleep_ms(1);
+        mt_yield();
+        mt_sleep_ms(1);
     }
     (*done)++;
 }
 
 static void run_regression_tests(void) {
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(yield_only_a, NULL) > 0);
-    assert(gt_go(yield_only_b, NULL) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(yield_only_a, NULL) > 0);
+    assert(mt_go(yield_only_b, NULL) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_event_count == 4);
     assert(g_events[0] == 1 && g_events[1] == 2 && g_events[2] == 3 && g_events[3] == 4);
     expect_clean_runtime();
@@ -452,10 +452,10 @@ static void run_stack_config_tests(void) {
     int value = 0;
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(stack_probe_task, sizes) > 0);
-    assert(gt_run() == GT_OK);
-    assert(sizes[0] >= GT_DEFAULT_STACK_SIZE);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(stack_probe_task, sizes) > 0);
+    assert(mt_run() == MT_OK);
+    assert(sizes[0] >= MT_DEFAULT_STACK_SIZE);
 #if !defined(_WIN32)
     assert(sizes[1] >= 4096u);
 #endif
@@ -463,46 +463,46 @@ static void run_stack_config_tests(void) {
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go_with_stack(stack_probe_task, sizes, 128u * 1024u) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go_with_stack(stack_probe_task, sizes, 128u * 1024u) > 0);
+    assert(mt_run() == MT_OK);
     assert(sizes[0] >= 128u * 1024u);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go_with_stack(minimum_stack_task, &value, GT_MIN_STACK_SIZE) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go_with_stack(minimum_stack_task, &value, MT_MIN_STACK_SIZE) > 0);
+    assert(mt_run() == MT_OK);
     assert(value == 7);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go_with_stack(simple_inc, &value, 1) == GT_ERR_INVALID);
-    assert(gt_debug_runnable_count() == 0);
-    assert(gt_debug_live_task_count() == 0);
+    assert(mt_init() == MT_OK);
+    assert(mt_go_with_stack(simple_inc, &value, 1) == MT_ERR_INVALID);
+    assert(mt_debug_runnable_count() == 0);
+    assert(mt_debug_live_task_count() == 0);
     teardown();
 
     reset_globals();
     value = 0;
-    assert(gt_go_with_stack(simple_inc, &value, 0) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_go_with_stack(simple_inc, &value, 0) > 0);
+    assert(mt_run() == MT_OK);
     assert(value == 1);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
     value = 0;
-    int rc = gt_go_with_stack(simple_inc, &value, 64u * 1024u * 1024u);
+    int rc = mt_go_with_stack(simple_inc, &value, 64u * 1024u * 1024u);
     if (rc > 0) {
-        assert(gt_run() == GT_OK);
+        assert(mt_run() == MT_OK);
         assert(value == 1);
     } else {
-        assert(rc == GT_ERR_NOMEM || rc == GT_ERR);
-        assert(gt_debug_runnable_count() == 0);
-        assert(gt_debug_live_task_count() == 0);
+        assert(rc == MT_ERR_NOMEM || rc == MT_ERR);
+        assert(mt_debug_runnable_count() == 0);
+        assert(mt_debug_live_task_count() == 0);
     }
     expect_clean_runtime();
     teardown();
@@ -511,15 +511,15 @@ static void run_stack_config_tests(void) {
     enum { MIXED = 12 };
     mixed_stack_arg_t args[MIXED];
     int sum = 0;
-    const size_t stack_sizes[] = { GT_DEFAULT_STACK_SIZE, 128u * 1024u, 256u * 1024u };
-    assert(gt_init() == GT_OK);
+    const size_t stack_sizes[] = { MT_DEFAULT_STACK_SIZE, 128u * 1024u, 256u * 1024u };
+    assert(mt_init() == MT_OK);
     for (int i = 0; i < MIXED; ++i) {
         args[i].id = i + 1;
         args[i].iterations = 3;
         args[i].sum = &sum;
-        assert(gt_go_with_stack(mixed_stack_task, &args[i], stack_sizes[i % 3]) > 0);
+        assert(mt_go_with_stack(mixed_stack_task, &args[i], stack_sizes[i % 3]) > 0);
     }
-    assert(gt_run() == GT_OK);
+    assert(mt_run() == MT_OK);
     assert(sum == ((MIXED * (MIXED + 1)) / 2) + MIXED * 3);
     expect_clean_runtime();
     teardown();
@@ -528,9 +528,9 @@ static void run_stack_config_tests(void) {
 static void run_guard_page_tests(void) {
     size_t sizes[2] = {0, 0};
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(stack_probe_task, sizes) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(stack_probe_task, sizes) > 0);
+    assert(mt_run() == MT_OK);
 #if !defined(_WIN32)
     assert(sizes[1] >= 4096u);
 #else
@@ -542,44 +542,44 @@ static void run_guard_page_tests(void) {
 
 static void run_basic_sleep_tests(void) {
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(sleep_zero_a, NULL) > 0);
-    assert(gt_go(sleep_zero_b, NULL) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(sleep_zero_a, NULL) > 0);
+    assert(mt_go(sleep_zero_b, NULL) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_event_count == 3);
     assert(g_events[0] == 1 && g_events[1] == 2 && g_events[2] == 3);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(timed_sleep_task, g_times) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(timed_sleep_task, g_times) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_times[1] >= g_times[0]);
     assert(g_times[1] - g_times[0] + (20u * MS_TO_NS) / 4u >= 20u * MS_TO_NS);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    gt_sleep_ms(1);
-    assert(gt_init() == GT_OK);
+    mt_sleep_ms(1);
+    assert(mt_init() == MT_OK);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(multi_sleep_task, g_times) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(multi_sleep_task, g_times) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_times[1] - g_times[0] + (5u * MS_TO_NS) >= 25u * MS_TO_NS);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
+    assert(mt_init() == MT_OK);
     for (int i = 0; i < 100; ++i) {
-        assert(gt_go(same_duration_sleep_task, &g_counter) > 0);
+        assert(mt_go(same_duration_sleep_task, &g_counter) > 0);
     }
-    assert(gt_run() == GT_OK);
+    assert(mt_run() == MT_OK);
     assert(g_counter == 100);
     expect_clean_runtime();
     teardown();
@@ -588,10 +588,10 @@ static void run_basic_sleep_tests(void) {
 static void run_timer_ordering_tests(void) {
     reset_globals();
     sleep_order_arg_t args1[] = {{1, 30}, {2, 5}};
-    assert(gt_init() == GT_OK);
-    assert(gt_go(sleep_order_task, &args1[0]) > 0);
-    assert(gt_go(sleep_order_task, &args1[1]) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(sleep_order_task, &args1[0]) > 0);
+    assert(mt_go(sleep_order_task, &args1[1]) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_event_count == 2);
     assert(g_events[0] == 2 && g_events[1] == 1);
     expect_clean_runtime();
@@ -599,49 +599,49 @@ static void run_timer_ordering_tests(void) {
 
     reset_globals();
     sleep_order_arg_t args2[] = {{1, 50}, {2, 10}, {3, 30}, {4, 20}, {5, 40}};
-    assert(gt_init() == GT_OK);
+    assert(mt_init() == MT_OK);
     for (size_t i = 0; i < ARRAY_LEN(args2); ++i) {
-        assert(gt_go(sleep_order_task, &args2[i]) > 0);
+        assert(mt_go(sleep_order_task, &args2[i]) > 0);
     }
-    assert(gt_run() == GT_OK);
+    assert(mt_run() == MT_OK);
     assert(g_event_count == ARRAY_LEN(args2));
     assert(g_events[0] == 2 && g_events[1] == 4 && g_events[2] == 3 && g_events[3] == 5 && g_events[4] == 1);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
+    assert(mt_init() == MT_OK);
     for (int i = 0; i < 8; ++i) {
-        assert(gt_go(same_duration_sleep_task, &g_counter) > 0);
+        assert(mt_go(same_duration_sleep_task, &g_counter) > 0);
     }
-    assert(gt_run() == GT_OK);
+    assert(mt_run() == MT_OK);
     assert(g_counter == 8);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
+    assert(mt_init() == MT_OK);
     for (int i = 0; i < 100; ++i) {
-        assert(gt_go(same_duration_sleep_task, &g_counter) > 0);
+        assert(mt_go(same_duration_sleep_task, &g_counter) > 0);
     }
-    assert(gt_run() == GT_OK);
+    assert(mt_run() == MT_OK);
     assert(g_counter == 100);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(timed_sleep_task, g_times) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(timed_sleep_task, g_times) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_times[1] >= g_times[0]);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(sleeping_count_sleeper, NULL) > 0);
-    assert(gt_go(sleeping_count_observer, NULL) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(sleeping_count_sleeper, NULL) > 0);
+    assert(mt_go(sleeping_count_observer, NULL) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_event_count == 2);
     assert(g_events[0] == 1 && g_events[1] == 2);
     expect_clean_runtime();
@@ -650,38 +650,38 @@ static void run_timer_ordering_tests(void) {
 
 static void run_scheduler_interaction_tests(void) {
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(ready_while_sleeping_a, NULL) > 0);
-    assert(gt_go(ready_while_sleeping_b, NULL) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(ready_while_sleeping_a, NULL) > 0);
+    assert(mt_go(ready_while_sleeping_b, NULL) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_event_count == 4);
     assert(g_events[0] == 1 && g_events[1] == 2 && g_events[2] == 3 && g_events[3] == 4);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(timed_sleep_task, g_times) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(timed_sleep_task, g_times) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_times[1] - g_times[0] + (20u * MS_TO_NS) / 4u >= 20u * MS_TO_NS);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
+    assert(mt_init() == MT_OK);
     for (int i = 0; i < 4; ++i) {
-        assert(gt_go(same_duration_sleep_task, &g_counter) > 0);
+        assert(mt_go(same_duration_sleep_task, &g_counter) > 0);
     }
-    assert(gt_run() == GT_OK);
+    assert(mt_run() == MT_OK);
     assert(g_counter == 4);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
     int child_event = 2;
-    assert(gt_init() == GT_OK);
-    assert(gt_go(parent_create_then_sleep, &child_event) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(parent_create_then_sleep, &child_event) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_event_count == 3);
     assert(g_events[0] == 1 && g_events[1] == 2 && g_events[2] == 3);
     expect_clean_runtime();
@@ -689,29 +689,29 @@ static void run_scheduler_interaction_tests(void) {
 
     reset_globals();
     child_event = 3;
-    assert(gt_init() == GT_OK);
-    assert(gt_go(parent_create_after_wake, &child_event) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(parent_create_after_wake, &child_event) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_event_count == 3);
     assert(g_events[0] == 1 && g_events[1] == 2 && g_events[2] == 3);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(sleep_then_yield_task, NULL) > 0);
-    assert(gt_go(sleep_then_yield_peer, NULL) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(sleep_then_yield_task, NULL) > 0);
+    assert(mt_go(sleep_then_yield_peer, NULL) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_event_count == 4);
     assert(g_events[0] == 1 && g_events[1] == 3 && g_events[2] == 2 && g_events[3] == 4);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(yield_then_sleep_task, NULL) > 0);
-    assert(gt_go(yield_then_sleep_peer, NULL) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(yield_then_sleep_task, NULL) > 0);
+    assert(mt_go(yield_then_sleep_peer, NULL) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_event_count == 4);
     assert(g_events[0] == 1 && g_events[1] == 2 && g_events[2] == 3 && g_events[3] == 4);
     expect_clean_runtime();
@@ -720,34 +720,34 @@ static void run_scheduler_interaction_tests(void) {
 
 static void run_lifecycle_tests(void) {
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(timed_sleep_task, g_times) > 0);
-    assert(gt_run() == GT_OK);
-    assert(gt_debug_completed_task_count() == 1);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(timed_sleep_task, g_times) > 0);
+    assert(mt_run() == MT_OK);
+    assert(mt_debug_completed_task_count() == 1);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(timed_sleep_task, g_times) > 0);
-    gt_shutdown();
-    assert(gt_init() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(timed_sleep_task, g_times) > 0);
+    mt_shutdown();
+    assert(mt_init() == MT_OK);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(shutdown_from_woken_task, NULL) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(shutdown_from_woken_task, NULL) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_event_count == 1 && g_events[0] == 1);
     expect_clean_runtime();
     teardown();
 
     for (int i = 0; i < 100; ++i) {
         reset_globals();
-        assert(gt_init() == GT_OK);
-        assert(gt_go(same_duration_sleep_task, &g_counter) > 0);
-        assert(gt_run() == GT_OK);
+        assert(mt_init() == MT_OK);
+        assert(mt_go(same_duration_sleep_task, &g_counter) > 0);
+        assert(mt_run() == MT_OK);
         assert(g_counter == 1);
         expect_clean_runtime();
         teardown();
@@ -758,41 +758,41 @@ static void run_error_tests(void) {
     int value = 0;
 
     reset_globals();
-    gt_sleep_ms(1);
-    assert(gt_init() == GT_OK);
+    mt_sleep_ms(1);
+    assert(mt_init() == MT_OK);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_go_with_stack(simple_inc, &value, GT_MIN_STACK_SIZE) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_go_with_stack(simple_inc, &value, MT_MIN_STACK_SIZE) > 0);
+    assert(mt_run() == MT_OK);
     assert(value == 1);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go_with_stack(NULL, &value, GT_MIN_STACK_SIZE) == GT_ERR_INVALID);
-    assert(gt_debug_runnable_count() == 0);
-    assert(gt_debug_live_task_count() == 0);
+    assert(mt_init() == MT_OK);
+    assert(mt_go_with_stack(NULL, &value, MT_MIN_STACK_SIZE) == MT_ERR_INVALID);
+    assert(mt_debug_runnable_count() == 0);
+    assert(mt_debug_live_task_count() == 0);
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    gt_test_fail_next_stack_alloc();
-    assert(gt_go_with_stack(simple_inc, &value, GT_MIN_STACK_SIZE) == GT_ERR_NOMEM);
-    assert(gt_debug_runnable_count() == 0);
-    assert(gt_debug_live_task_count() == 0);
-    assert(gt_go(simple_inc, &value) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    mt_test_fail_next_stack_alloc();
+    assert(mt_go_with_stack(simple_inc, &value, MT_MIN_STACK_SIZE) == MT_ERR_NOMEM);
+    assert(mt_debug_runnable_count() == 0);
+    assert(mt_debug_live_task_count() == 0);
+    assert(mt_go(simple_inc, &value) > 0);
+    assert(mt_run() == MT_OK);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(timer_alloc_failure_task, g_times) > 0);
-    assert(gt_go(timer_alloc_failure_peer, NULL) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(timer_alloc_failure_task, g_times) > 0);
+    assert(mt_go(timer_alloc_failure_peer, NULL) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_event_count == 2);
     assert(g_events[0] == 1 && g_events[1] == 2);
     assert(g_times[1] >= g_times[0]);
@@ -801,9 +801,9 @@ static void run_error_tests(void) {
 
     reset_globals();
     value = 0;
-    assert(gt_init() == GT_OK);
-    assert(gt_go(clock_failure_sleep_task, &value) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(clock_failure_sleep_task, &value) > 0);
+    assert(mt_run() == MT_OK);
     assert(value == 99);
     expect_clean_runtime();
     teardown();
@@ -813,14 +813,14 @@ static void run_stress_tests(void) {
     reset_globals();
     sleep_order_arg_t *many_args = (sleep_order_arg_t *)calloc((size_t)V02_MANY_SLEEPERS, sizeof(*many_args));
     assert(many_args != NULL);
-    assert(gt_init() == GT_OK);
+    assert(mt_init() == MT_OK);
     for (int i = 0; i < V02_MANY_SLEEPERS; ++i) {
         sleep_order_arg_t *arg = &many_args[i];
         arg->id = i % 1000;
         arg->ms = (unsigned)(i % 21);
-        assert(gt_go(sleep_order_task, arg) > 0);
+        assert(mt_go(sleep_order_task, arg) > 0);
     }
-    assert(gt_run() == GT_OK);
+    assert(mt_run() == MT_OK);
     assert(g_event_count == (size_t)V02_MANY_SLEEPERS);
     expect_clean_runtime();
     teardown();
@@ -828,11 +828,11 @@ static void run_stress_tests(void) {
 
     reset_globals();
     int done = 0;
-    assert(gt_init() == GT_OK);
+    assert(mt_init() == MT_OK);
     for (int i = 0; i < V02_SLEEP_YIELD_TASKS; ++i) {
-        assert(gt_go(sleep_yield_cycle_task, &done) > 0);
+        assert(mt_go(sleep_yield_cycle_task, &done) > 0);
     }
-    assert(gt_run() == GT_OK);
+    assert(mt_run() == MT_OK);
     assert(done == V02_SLEEP_YIELD_TASKS);
     expect_clean_runtime();
     teardown();
@@ -840,23 +840,23 @@ static void run_stress_tests(void) {
     reset_globals();
     done = 0;
     churn_arg_t args[V02_TIMER_CHURN_TASKS];
-    assert(gt_init() == GT_OK);
+    assert(mt_init() == MT_OK);
     for (int i = 0; i < V02_TIMER_CHURN_TASKS; ++i) {
         args[i].seed = (unsigned)(i + 1);
         args[i].iterations = V02_TIMER_CHURN_ITERS;
         args[i].done = &done;
-        assert(gt_go(churn_task, &args[i]) > 0);
+        assert(mt_go(churn_task, &args[i]) > 0);
     }
-    assert(gt_run() == GT_OK);
+    assert(mt_run() == MT_OK);
     assert(done == V02_TIMER_CHURN_TASKS);
     expect_clean_runtime();
     teardown();
 
     for (int i = 0; i < V02_RUNTIME_CYCLES; ++i) {
         reset_globals();
-        assert(gt_init() == GT_OK);
-        assert(gt_go(same_duration_sleep_task, &g_counter) > 0);
-        assert(gt_run() == GT_OK);
+        assert(mt_init() == MT_OK);
+        assert(mt_go(same_duration_sleep_task, &g_counter) > 0);
+        assert(mt_run() == MT_OK);
         assert(g_counter == 1);
         expect_clean_runtime();
         teardown();
@@ -869,9 +869,9 @@ static void run_backend_and_memory_tests(void) {
     size_t sizes[2] = {0, 0};
     reset_globals();
     before = memory_snapshot();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(stack_probe_task, sizes) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(stack_probe_task, sizes) > 0);
+    assert(mt_run() == MT_OK);
 #if !defined(_WIN32)
     assert(sizes[1] >= 4096u);
 #endif
@@ -881,9 +881,9 @@ static void run_backend_and_memory_tests(void) {
 
     reset_globals();
     before = memory_snapshot();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(timed_sleep_task, g_times) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(timed_sleep_task, g_times) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_times[1] - g_times[0] < UINT64_C(5000000000));
     expect_clean_runtime();
     teardown();
@@ -891,11 +891,11 @@ static void run_backend_and_memory_tests(void) {
 
     reset_globals();
     before = memory_snapshot();
-    assert(gt_init() == GT_OK);
+    assert(mt_init() == MT_OK);
     for (int i = 0; i < 100; ++i) {
-        assert(gt_go_with_stack(simple_inc, &g_counter, (i % 2) ? GT_DEFAULT_STACK_SIZE : 128u * 1024u) > 0);
+        assert(mt_go_with_stack(simple_inc, &g_counter, (i % 2) ? MT_DEFAULT_STACK_SIZE : 128u * 1024u) > 0);
     }
-    assert(gt_run() == GT_OK);
+    assert(mt_run() == MT_OK);
     assert(g_counter == 100);
     expect_clean_runtime();
     teardown();
@@ -904,30 +904,30 @@ static void run_backend_and_memory_tests(void) {
 
 static void run_misuse_tests(void) {
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(long_os_sleep_task, NULL) > 0);
-    assert(gt_go(ready_peer_task, NULL) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(long_os_sleep_task, NULL) > 0);
+    assert(mt_go(ready_peer_task, NULL) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_event_count == 3);
     assert(g_events[0] == 1 && g_events[1] == 2 && g_events[2] == 3);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(busy_loop_task, NULL) > 0);
-    assert(gt_go(ready_peer_task, NULL) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(busy_loop_task, NULL) > 0);
+    assert(mt_go(ready_peer_task, NULL) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_event_count == 3);
     assert(g_events[0] == 1 && g_events[1] == 2 && g_events[2] == 3);
     expect_clean_runtime();
     teardown();
 
     reset_globals();
-    assert(gt_init() == GT_OK);
-    assert(gt_go(escape_stack_pointer_task, NULL) > 0);
-    assert(gt_go(stack_escape_documentation_observer, NULL) > 0);
-    assert(gt_run() == GT_OK);
+    assert(mt_init() == MT_OK);
+    assert(mt_go(escape_stack_pointer_task, NULL) > 0);
+    assert(mt_go(stack_escape_documentation_observer, NULL) > 0);
+    assert(mt_run() == MT_OK);
     assert(g_event_count == 2);
     assert(g_events[0] == 1 && g_events[1] == 2);
     assert(g_escaped_stack_pointer != 0);

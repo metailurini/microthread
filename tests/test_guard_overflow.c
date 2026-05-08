@@ -1,4 +1,4 @@
-#include "gt.h"
+#include "microthread.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -37,10 +37,10 @@ static void overflow_task(void *arg) {
 
 #if !defined(_WIN32)
 static int run_child(void) {
-    assert(gt_init() == GT_OK);
-    assert(gt_go_with_stack(overflow_task, NULL, GT_MIN_STACK_SIZE) > 0);
-    (void)gt_run();
-    gt_shutdown();
+    assert(mt_init() == MT_OK);
+    assert(mt_go_with_stack(overflow_task, NULL, MT_MIN_STACK_SIZE) > 0);
+    (void)mt_run();
+    mt_shutdown();
     return 0;
 }
 #endif

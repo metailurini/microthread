@@ -1,4 +1,4 @@
-# Green Threads v0.6
+# MicroThread v0.6
 
 This is a minimal, stackful, cooperative green-thread runtime in C.
 
@@ -7,23 +7,23 @@ The current implemented mainstream version is **v0.6**. It intentionally keeps t
 Implemented features:
 
 - cooperative scheduler with a shared, thread-safe run queue
-- multi-worker OS-thread execution through `gt_runtime_start(worker_count)` / `gt_run_workers(worker_count)` on Unix-like platforms
-- `gt_go(fn, arg)` task creation
-- `gt_go_with_stack(fn, arg, stack_size)` task creation with explicit stack size
-- `gt_yield()` cooperative yielding
-- `gt_sleep_ms(ms)` cooperative sleep/timer parking
-- `gt_chan_create`, `gt_chan_send`, `gt_chan_recv`, `gt_chan_close`, and `gt_chan_destroy`
-- `gt_chan_try_send` and `gt_chan_try_recv` nonblocking channel operations
-- `gt_select()` for channel send/receive, default, and timeout cases
+- multi-worker OS-thread execution through `mt_runtime_start(worker_count)` / `mt_run_workers(worker_count)` on Unix-like platforms
+- `mt_go(fn, arg)` task creation
+- `mt_go_with_stack(fn, arg, stack_size)` task creation with explicit stack size
+- `mt_yield()` cooperative yielding
+- `mt_sleep_ms(ms)` cooperative sleep/timer parking
+- `mt_chan_create`, `mt_chan_send`, `mt_chan_recv`, `mt_chan_close`, and `mt_chan_destroy`
+- `mt_chan_try_send` and `mt_chan_try_recv` nonblocking channel operations
+- `mt_select()` for channel send/receive, default, and timeout cases
 - buffered and unbuffered cooperative channels
 - sender/receiver parking on channel wait queues
-- task handles through `gt_go_handle()` and `gt_go_handle_with_stack()`
-- `gt_join()` for waiting on handled task completion from another green thread
-- cooperative cancellation through `gt_task_cancel()` and `gt_task_cancelled()`
-- task status queries through `gt_task_status()`
-- explicit handle release through `gt_task_handle_release()`
-- `gt_run()` run loop
-- `gt_runtime_start(worker_count)`, `gt_runtime_workers()`, and `gt_run_workers(worker_count)` worker runtime API
+- task handles through `mt_go_handle()` and `mt_go_handle_with_stack()`
+- `mt_join()` for waiting on handled task completion from another microthread
+- cooperative cancellation through `mt_task_cancel()` and `mt_task_cancelled()`
+- task status queries through `mt_task_status()`
+- explicit handle release through `mt_task_handle_release()`
+- `mt_run()` run loop
+- `mt_runtime_start(worker_count)`, `mt_runtime_workers()`, and `mt_run_workers(worker_count)` worker runtime API
 - configurable stack sizes with a minimum stack-size check
 - guarded stack mappings on Unix-like platforms using `mmap`/`mprotect`
 - Windows Fiber stack sizing through `CreateFiber`
@@ -103,86 +103,86 @@ make examples
 ## API
 
 ```c
-typedef void (*gt_fn)(void *arg);
+typedef void (*mt_fn)(void *arg);
 
-typedef struct gt_chan gt_chan_t;
-typedef struct gt_task_handle gt_task_handle_t;
+typedef struct mt_chan mt_chan_t;
+typedef struct mt_task_handle mt_task_handle_t;
 
-typedef enum gt_task_status {
-    GT_TASK_STATUS_READY,
-    GT_TASK_STATUS_RUNNING,
-    GT_TASK_STATUS_SLEEPING,
-    GT_TASK_STATUS_WAITING_CHAN,
-    GT_TASK_STATUS_WAITING_JOIN,
-    GT_TASK_STATUS_DONE,
-    GT_TASK_STATUS_CANCELLED
-} gt_task_status_t;
+typedef enum mt_task_status {
+    MT_TASK_STATUS_READY,
+    MT_TASK_STATUS_RUNNING,
+    MT_TASK_STATUS_SLEEPING,
+    MT_TASK_STATUS_WAITING_CHAN,
+    MT_TASK_STATUS_WAITING_JOIN,
+    MT_TASK_STATUS_DONE,
+    MT_TASK_STATUS_CANCELLED
+} mt_task_status_t;
 
-int  gt_init(void);
-int  gt_go(gt_fn fn, void *arg);
-int  gt_go_with_stack(gt_fn fn, void *arg, size_t stack_size);
-gt_task_handle_t *gt_go_handle(gt_fn fn, void *arg);
-gt_task_handle_t *gt_go_handle_with_stack(gt_fn fn, void *arg, size_t stack_size);
-int  gt_run(void);
-int  gt_runtime_start(size_t worker_count);
-int  gt_runtime_workers(void);
-int  gt_run_workers(size_t worker_count);
-void gt_yield(void);
-void gt_sleep_ms(uint64_t ms);
-void gt_shutdown(void);
+int  mt_init(void);
+int  mt_go(mt_fn fn, void *arg);
+int  mt_go_with_stack(mt_fn fn, void *arg, size_t stack_size);
+mt_task_handle_t *mt_go_handle(mt_fn fn, void *arg);
+mt_task_handle_t *mt_go_handle_with_stack(mt_fn fn, void *arg, size_t stack_size);
+int  mt_run(void);
+int  mt_runtime_start(size_t worker_count);
+int  mt_runtime_workers(void);
+int  mt_run_workers(size_t worker_count);
+void mt_yield(void);
+void mt_sleep_ms(uint64_t ms);
+void mt_shutdown(void);
 
-int  gt_join(gt_task_handle_t *task);
-int  gt_task_cancel(gt_task_handle_t *task);
-int  gt_task_cancelled(void);
-int  gt_task_status(gt_task_handle_t *task, gt_task_status_t *out_status);
-void gt_task_handle_release(gt_task_handle_t *task);
+int  mt_join(mt_task_handle_t *task);
+int  mt_task_cancel(mt_task_handle_t *task);
+int  mt_task_cancelled(void);
+int  mt_task_status(mt_task_handle_t *task, mt_task_status_t *out_status);
+void mt_task_handle_release(mt_task_handle_t *task);
 
-gt_chan_t *gt_chan_create(size_t elem_size, size_t capacity);
-int        gt_chan_send(gt_chan_t *ch, const void *value);
-int        gt_chan_recv(gt_chan_t *ch, void *out);
-int        gt_chan_try_send(gt_chan_t *ch, const void *value);
-int        gt_chan_try_recv(gt_chan_t *ch, void *out);
-int        gt_chan_close(gt_chan_t *ch);
-int        gt_chan_destroy(gt_chan_t *ch);
-size_t     gt_chan_len(const gt_chan_t *ch);
-size_t     gt_chan_capacity(const gt_chan_t *ch);
-int        gt_chan_is_closed(const gt_chan_t *ch);
+mt_chan_t *mt_chan_create(size_t elem_size, size_t capacity);
+int        mt_chan_send(mt_chan_t *ch, const void *value);
+int        mt_chan_recv(mt_chan_t *ch, void *out);
+int        mt_chan_try_send(mt_chan_t *ch, const void *value);
+int        mt_chan_try_recv(mt_chan_t *ch, void *out);
+int        mt_chan_close(mt_chan_t *ch);
+int        mt_chan_destroy(mt_chan_t *ch);
+size_t     mt_chan_len(const mt_chan_t *ch);
+size_t     mt_chan_capacity(const mt_chan_t *ch);
+int        mt_chan_is_closed(const mt_chan_t *ch);
 
-typedef enum gt_select_op {
-    GT_SELECT_RECV,
-    GT_SELECT_SEND,
-    GT_SELECT_DEFAULT,
-    GT_SELECT_TIMEOUT
-} gt_select_op_t;
+typedef enum mt_select_op {
+    MT_SELECT_RECV,
+    MT_SELECT_SEND,
+    MT_SELECT_DEFAULT,
+    MT_SELECT_TIMEOUT
+} mt_select_op_t;
 
-typedef struct gt_select_case {
-    gt_select_op_t op;
-    gt_chan_t *ch;
+typedef struct mt_select_case {
+    mt_select_op_t op;
+    mt_chan_t *ch;
     void *value;
     uint64_t timeout_ms;
-} gt_select_case_t;
+} mt_select_case_t;
 
-int gt_select(gt_select_case_t *cases, size_t count, size_t *selected_index);
+int mt_select(mt_select_case_t *cases, size_t count, size_t *selected_index);
 ```
 
 ## Notes
 
-This is intentionally early runtime code. It does not yet include preemption. On Unix-like platforms, `gt_runtime_start(n)` / `gt_run_workers(n)` run green threads across multiple pthread-backed OS workers using a shared, mutex-protected run queue, timer heap, channel queues, select waiters, and task-handle state. The implementation is thread-safe at the runtime API boundary, but it is still cooperative: a running green thread keeps its OS worker until it yields, sleeps, parks, or returns.
+This is intentionally early runtime code. It does not yet include preemption. On Unix-like platforms, `mt_runtime_start(n)` / `mt_run_workers(n)` run microthreads across multiple pthread-backed OS workers using a shared, mutex-protected run queue, timer heap, channel queues, select waiters, and task-handle state. The implementation is thread-safe at the runtime API boundary, but it is still cooperative: a running microthread keeps its OS worker until it yields, sleeps, parks, or returns.
 
 The current multi-worker scheduler uses a single global run queue rather than per-worker local queues and work stealing. This satisfies true parallel worker execution and cross-worker wakeups, but strict work-stealing-specific v0.6 tests remain future work unless the plan is updated to accept the simpler shared-queue scheduler.
 
-Cancellation is cooperative. `gt_task_cancel()` sets a cancellation request and wakes sleeping/channel/join waiters where possible, but it does not asynchronously kill a running task. Running tasks should periodically call `gt_task_cancelled()` or return from interrupted runtime operations.
+Cancellation is cooperative. `mt_task_cancel()` sets a cancellation request and wakes sleeping/channel/join waiters where possible, but it does not asynchronously kill a running task. Running tasks should periodically call `mt_task_cancelled()` or return from interrupted runtime operations.
 
-`gt_join()` is a green-thread operation. Calling it outside a running green thread returns `GT_ERR_STATE` instead of blocking the owner OS thread.
+`mt_join()` is a green-thread operation. Calling it outside a running microthread returns `MT_ERR_STATE` instead of blocking the owner OS thread.
 
-`gt_chan_try_send()` and `gt_chan_try_recv()` never park the current task. They return `GT_ERR_WOULD_BLOCK` when an open channel operation cannot complete immediately.
+`mt_chan_try_send()` and `mt_chan_try_recv()` never park the current task. They return `MT_ERR_WOULD_BLOCK` when an open channel operation cannot complete immediately.
 
-`gt_select()` is channel-only. It supports send, receive, one default case, and one timeout case. When no channel case is immediately ready, default fires immediately; a zero timeout behaves like default; otherwise the current green thread parks until a channel case becomes ready, the timeout expires, cancellation wakes it, or shutdown occurs.
+`mt_select()` is channel-only. It supports send, receive, one default case, and one timeout case. When no channel case is immediately ready, default fires immediately; a zero timeout behaves like default; otherwise the current microthread parks until a channel case becomes ready, the timeout expires, cancellation wakes it, or shutdown occurs.
 
-Task handles are user-owned. Release each handle with `gt_task_handle_release()` when you no longer need to join/query/cancel that task. Releasing a handle does not kill the task.
+Task handles are user-owned. Release each handle with `mt_task_handle_release()` when you no longer need to join/query/cancel that task. Releasing a handle does not kill the task.
 
-`gt_sleep_ms(0)` is documented as yield-like behavior. Calling `gt_sleep_ms()` outside a running green thread is a safe no-op.
+`mt_sleep_ms(0)` is documented as yield-like behavior. Calling `mt_sleep_ms()` outside a running microthread is a safe no-op.
 
 The scheduler is portable C. Platform-specific context switching is isolated behind `src/context.h`. Non-macOS Unix-like builds currently use `ucontext`, macOS x86_64/aarch64 builds use the assembly backend, and Windows builds use Fibers.
 
-For platforms or embedders that cannot use guard pages, build with `-DGT_DISABLE_GUARD_PAGES`. In that mode, the runtime still supports stackful green threads and debug metadata reports a guard size of zero, but stack overflow protection is intentionally unavailable.
+For platforms or embedders that cannot use guard pages, build with `-DMT_DISABLE_GUARD_PAGES`. In that mode, the runtime still supports stackful microthreads and debug metadata reports a guard size of zero, but stack overflow protection is intentionally unavailable.

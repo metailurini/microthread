@@ -1,9 +1,9 @@
 CC ?= cc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -O2
 CPPFLAGS ?= -Iinclude
-TEST_CPPFLAGS := $(CPPFLAGS) -DGT_TESTING
+TEST_CPPFLAGS := $(CPPFLAGS) -DMT_TESTING
 
-SRC := src/gt.c
+SRC := src/microthread.c
 ASM_SRC :=
 
 ifeq ($(OS),Windows_NT)
@@ -26,7 +26,7 @@ LDLIBS += $(THREAD_FLAGS)
 CFLAGS += $(THREAD_FLAGS)
 
 BUILD_DIR := build
-LIB := $(BUILD_DIR)/libgt.a
+LIB := $(BUILD_DIR)/libmicrothread.a
 OBJ := $(SRC:%.c=$(BUILD_DIR)/%.o) $(ASM_SRC:%.S=$(BUILD_DIR)/%.o)
 
 .PHONY: all test stress sanitize tsan valgrind guard-test guard-disabled-test example examples sleep-example channels-example handles-example select-example try-example select-advanced-example clean
@@ -51,7 +51,7 @@ $(BUILD_DIR)/test_v0_1$(EXE): tests/test_v0_1.c $(SRC) $(ASM_SRC)
 
 $(BUILD_DIR)/test_v0_1_full$(EXE): tests/test_v0_1.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DGT_FULL_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -DMT_FULL_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
 $(BUILD_DIR)/test_v0_1_asan$(EXE): tests/test_v0_1.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
@@ -63,7 +63,7 @@ $(BUILD_DIR)/test_v0_2$(EXE): tests/test_v0_2.c $(SRC) $(ASM_SRC)
 
 $(BUILD_DIR)/test_v0_2_full$(EXE): tests/test_v0_2.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DGT_FULL_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -DMT_FULL_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
 $(BUILD_DIR)/test_v0_2_asan$(EXE): tests/test_v0_2.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
@@ -75,7 +75,7 @@ $(BUILD_DIR)/test_v0_3$(EXE): tests/test_v0_3.c $(SRC) $(ASM_SRC)
 
 $(BUILD_DIR)/test_v0_3_full$(EXE): tests/test_v0_3.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DGT_FULL_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -DMT_FULL_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
 $(BUILD_DIR)/test_v0_3_asan$(EXE): tests/test_v0_3.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
@@ -87,7 +87,7 @@ $(BUILD_DIR)/test_v0_4$(EXE): tests/test_v0_4.c $(SRC) $(ASM_SRC)
 
 $(BUILD_DIR)/test_v0_4_full$(EXE): tests/test_v0_4.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DGT_FULL_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -DMT_FULL_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
 $(BUILD_DIR)/test_v0_4_asan$(EXE): tests/test_v0_4.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
@@ -119,11 +119,11 @@ $(BUILD_DIR)/test_guard_overflow$(EXE): tests/test_guard_overflow.c $(SRC) $(ASM
 
 $(BUILD_DIR)/test_guard_disabled$(EXE): tests/test_guard_disabled.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DGT_DISABLE_GUARD_PAGES $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -DMT_DISABLE_GUARD_PAGES $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
 $(BUILD_DIR)/test_v0_4_guard_disabled$(EXE): tests/test_v0_4.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DGT_DISABLE_GUARD_PAGES $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+	$(CC) $(TEST_CPPFLAGS) -DMT_DISABLE_GUARD_PAGES $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
 
 $(BUILD_DIR)/basic$(EXE): examples/basic.c $(LIB)
 	@mkdir -p $(dir $@)

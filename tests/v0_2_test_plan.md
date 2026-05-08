@@ -9,8 +9,8 @@ The target v0.2 features are:
 - configurable stack sizes
 - stack allocator abstraction
 - guard pages where the platform supports them
-- `gt_go_with_stack(fn, arg, stack_size)`
-- `gt_sleep_ms(ms)`
+- `mt_go_with_stack(fn, arg, stack_size)`
+- `mt_sleep_ms(ms)`
 - timer heap or equivalent deadline queue
 - scheduler support for sleeping tasks
 - runtime exit when all tasks are completed and no sleepers remain
@@ -21,24 +21,24 @@ This test plan assumes v0.1 behavior remains valid. All v0.1 tests must continue
 ## 2. Proposed v0.2 Public API
 
 ```c
-typedef struct gt_options {
+typedef struct mt_options {
     size_t stack_size;
-} gt_options_t;
+} mt_options_t;
 
-int gt_go_with_stack(gt_fn fn, void *arg, size_t stack_size);
+int mt_go_with_stack(mt_fn fn, void *arg, size_t stack_size);
 
-void gt_sleep_ms(uint64_t ms);
+void mt_sleep_ms(uint64_t ms);
 
-size_t gt_debug_sleeping_task_count(void);
+size_t mt_debug_sleeping_task_count(void);
 ```
 
 Implementation notes now documented for v0.2:
 
-- `gt_go(fn, arg)` is equivalent to `gt_go_with_stack(fn, arg, 0)`.
+- `mt_go(fn, arg)` is equivalent to `mt_go_with_stack(fn, arg, 0)`.
 - `stack_size == 0` means use the default stack size.
-- stack sizes below `GT_MIN_STACK_SIZE` are rejected.
-- `gt_sleep_ms(0)` behaves like `gt_yield()`.
-- `gt_sleep_ms()` outside a running green thread is a safe no-op.
+- stack sizes below `MT_MIN_STACK_SIZE` are rejected.
+- `mt_sleep_ms(0)` behaves like `mt_yield()`.
+- `mt_sleep_ms()` outside a running microthread is a safe no-op.
 
 ## 3. Test Categories
 
@@ -47,7 +47,7 @@ Implementation notes now documented for v0.2:
 | TC-V02-REG | v0.1 regression safety |
 | TC-STACKCFG | configurable stack creation |
 | TC-GUARD | guard page and stack overflow behavior |
-| TC-SLEEP | basic `gt_sleep_ms` behavior |
+| TC-SLEEP | basic `mt_sleep_ms` behavior |
 | TC-TIMER | timer ordering and deadline behavior |
 | TC-SCHED | scheduler behavior with ready and sleeping tasks |
 | TC-LIFE | lifecycle and cleanup of sleeping tasks |
@@ -112,8 +112,8 @@ Expected:
 
 Steps:
 
-1. Create several tasks that only call `gt_yield()`.
-2. Do not call `gt_sleep_ms()`.
+1. Create several tasks that only call `mt_yield()`.
+2. Do not call `mt_sleep_ms()`.
 3. Run the scheduler.
 
 Expected:
@@ -127,7 +127,7 @@ Expected:
 
 Steps:
 
-1. Call `gt_go(fn, arg)`.
+1. Call `mt_go(fn, arg)`.
 2. Run the scheduler.
 
 Expected:
@@ -139,7 +139,7 @@ Expected:
 
 Steps:
 
-1. Call `gt_go_with_stack(fn, arg, 128 * 1024)`.
+1. Call `mt_go_with_stack(fn, arg, 128 * 1024)`.
 2. In the task, yield at least once.
 3. Return normally.
 
@@ -164,7 +164,7 @@ Expected:
 
 Steps:
 
-1. Call `gt_go_with_stack(fn, arg, 1)`.
+1. Call `mt_go_with_stack(fn, arg, 1)`.
 
 Expected:
 
@@ -176,7 +176,7 @@ Expected:
 
 Steps:
 
-1. Call `gt_go_with_stack(fn, arg, 0)`.
+1. Call `mt_go_with_stack(fn, arg, 0)`.
 
 Expected:
 
@@ -271,7 +271,7 @@ Expected:
 Steps:
 
 1. Task records event `A1`.
-2. Task calls `gt_sleep_ms(0)`.
+2. Task calls `mt_sleep_ms(0)`.
 3. Task records event `A2`.
 
 Expected:
@@ -285,7 +285,7 @@ Expected:
 Steps:
 
 1. Task records start time.
-2. Calls `gt_sleep_ms(20)`.
+2. Calls `mt_sleep_ms(20)`.
 3. Records resume time.
 
 Expected:
@@ -293,11 +293,11 @@ Expected:
 - Resume time is not earlier than requested deadline minus tolerance.
 - Task completes after waking.
 
-### TC-SLEEP-003: sleep outside a green thread
+### TC-SLEEP-003: sleep outside a microthread
 
 Steps:
 
-1. Call `gt_sleep_ms(1)` from main, outside a running task.
+1. Call `mt_sleep_ms(1)` from main, outside a running task.
 
 Expected:
 
@@ -309,7 +309,7 @@ Expected:
 Steps:
 
 1. Task loops 5 times.
-2. Each iteration calls `gt_sleep_ms(5)`.
+2. Each iteration calls `mt_sleep_ms(5)`.
 
 Expected:
 
@@ -326,7 +326,7 @@ Steps:
 Expected:
 
 - All tasks wake and complete.
-- No tasks remain sleeping after `gt_run()` returns.
+- No tasks remain sleeping after `mt_run()` returns.
 
 ## 9. Timer Ordering Tests
 
@@ -425,7 +425,7 @@ Steps:
 
 Expected:
 
-- `gt_run()` does not return early.
+- `mt_run()` does not return early.
 - Scheduler waits until the task wakes and completes.
 
 ### TC-SCHED-003: scheduler returns when no live tasks remain
@@ -437,7 +437,7 @@ Steps:
 
 Expected:
 
-- `gt_run()` returns after all tasks complete.
+- `mt_run()` returns after all tasks complete.
 - Runnable count and sleeping count are zero.
 
 ### TC-SCHED-004: task creates child then sleeps
@@ -463,14 +463,14 @@ Steps:
 
 Expected:
 
-- Child runs and completes before `gt_run()` returns.
+- Child runs and completes before `mt_run()` returns.
 
 ### TC-SCHED-006: yield after sleep
 
 Steps:
 
 1. Task sleeps.
-2. After waking, task calls `gt_yield()`.
+2. After waking, task calls `mt_yield()`.
 3. Task resumes and completes.
 
 Expected:
@@ -503,7 +503,7 @@ Expected:
 Steps:
 
 1. Create a task that sleeps for a long duration.
-2. Before running, or from outside the scheduler, call `gt_shutdown()`.
+2. Before running, or from outside the scheduler, call `mt_shutdown()`.
 
 Expected:
 
@@ -516,7 +516,7 @@ Expected:
 Steps:
 
 1. Task sleeps briefly.
-2. After waking, task calls `gt_shutdown()`.
+2. After waking, task calls `mt_shutdown()`.
 
 Expected:
 
@@ -541,28 +541,28 @@ Expected:
 
 Steps:
 
-1. Call `gt_sleep_ms(1)` before `gt_init()`.
+1. Call `mt_sleep_ms(1)` before `mt_init()`.
 
 Expected:
 
 - Behavior is documented.
 - Must not crash.
 
-### TC-ERR-002: `gt_go_with_stack` before init
+### TC-ERR-002: `mt_go_with_stack` before init
 
 Steps:
 
-1. Call `gt_go_with_stack(fn, arg, valid_stack_size)` before `gt_init()`.
+1. Call `mt_go_with_stack(fn, arg, valid_stack_size)` before `mt_init()`.
 
 Expected:
 
-- Either auto-initializes like `gt_go()` or returns documented error.
+- Either auto-initializes like `mt_go()` or returns documented error.
 
 ### TC-ERR-003: invalid function pointer with custom stack
 
 Steps:
 
-1. Call `gt_go_with_stack(NULL, arg, valid_stack_size)`.
+1. Call `mt_go_with_stack(NULL, arg, valid_stack_size)`.
 
 Expected:
 
@@ -574,7 +574,7 @@ Expected:
 Steps:
 
 1. Use test-only fault injection to fail stack allocation.
-2. Call `gt_go_with_stack()`.
+2. Call `mt_go_with_stack()`.
 
 Expected:
 
@@ -587,7 +587,7 @@ Expected:
 Steps:
 
 1. Use test-only fault injection to fail timer heap growth.
-2. Task calls `gt_sleep_ms()`.
+2. Task calls `mt_sleep_ms()`.
 
 Expected:
 
@@ -624,7 +624,7 @@ Expected:
 Steps:
 
 1. Create 200 tasks.
-2. Each task alternates `gt_yield()` and `gt_sleep_ms(1)` for 100 iterations.
+2. Each task alternates `mt_yield()` and `mt_sleep_ms(1)` for 100 iterations.
 
 Expected:
 
@@ -726,7 +726,7 @@ Expected:
 
 ## 16. Misuse and Contract Tests
 
-### TC-MISUSE-001: blocking OS sleep inside green thread
+### TC-MISUSE-001: blocking OS sleep inside microthread
 
 Steps:
 
@@ -736,7 +736,7 @@ Steps:
 Expected:
 
 - Task B does not run until OS sleep returns.
-- This documents why users should call `gt_sleep_ms()` instead.
+- This documents why users should call `mt_sleep_ms()` instead.
 
 ### TC-MISUSE-002: busy loop still blocks scheduler
 
@@ -771,7 +771,7 @@ Recommended files:
 ```text
 tests/test_v0_1.c              existing v0.1 regression suite
 tests/test_v0_2.c              normal v0.2 behavior tests
-tests/test_v0_2_stress.c       optional heavy stress tests, or same binary with GT_STRESS
+tests/test_v0_2_stress.c       optional heavy stress tests, or same binary with MT_STRESS
 tests/test_guard_overflow.c    subprocess/crash-style guard page test
 tests/test_guard_disabled.c    no-guard fallback configuration test
 tests/TEST_COVERAGE.md         updated coverage matrix
@@ -795,10 +795,10 @@ v0.2 is considered complete when:
 
 ```text
 1. All v0.1 tests still pass.
-2. `gt_go_with_stack()` supports valid custom stack sizes.
+2. `mt_go_with_stack()` supports valid custom stack sizes.
 3. Invalid stack sizes are rejected or documented.
 4. Guard pages are implemented on at least Unix, or platform limitations are documented.
-5. `gt_sleep_ms()` parks the current task without blocking ready tasks.
+5. `mt_sleep_ms()` parks the current task without blocking ready tasks.
 6. Scheduler waits correctly when only sleeping tasks exist.
 7. Timer ordering is correct for different deadlines.
 8. Sleeping tasks are cleaned correctly on completion and shutdown.
@@ -809,7 +809,7 @@ v0.2 is considered complete when:
 ## 19. Implementation Notes for Tests
 
 - Do not assert exact wake time. Assert minimum deadline and broad upper bounds.
-- Keep normal tests fast; put large task counts behind `GT_STRESS` or `make stress`.
+- Keep normal tests fast; put large task counts behind `MT_STRESS` or `make stress`.
 - Use test-only fault injection for allocation and clock errors.
 - Keep guard-page overflow tests out of the normal in-process test binary.
 - Always check debug counters after each test:

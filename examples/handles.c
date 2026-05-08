@@ -1,4 +1,4 @@
-#include "gt.h"
+#include "microthread.h"
 
 #include <stdio.h>
 
@@ -6,54 +6,54 @@ static void child(void *arg) {
     int *value = (int *)arg;
     for (int i = 0; i < 3; ++i) {
         (*value)++;
-        gt_yield();
+        mt_yield();
     }
 }
 
 static void parent(void *arg) {
     int *value = (int *)arg;
-    gt_task_handle_t *h = gt_go_handle(child, value);
+    mt_task_handle_t *h = mt_go_handle(child, value);
     if (!h) {
         printf("failed to create child\n");
         return;
     }
 
-    int rc = gt_join(h);
+    int rc = mt_join(h);
     printf("child joined rc=%d value=%d\n", rc, *value);
-    gt_task_handle_release(h);
+    mt_task_handle_release(h);
 }
 
 static void cancellable(void *arg) {
     (void)arg;
-    while (!gt_task_cancelled()) {
-        gt_yield();
+    while (!mt_task_cancelled()) {
+        mt_yield();
     }
     printf("cancel observed\n");
 }
 
 static void canceller(void *arg) {
-    gt_task_handle_t *h = (gt_task_handle_t *)arg;
-    gt_yield();
-    gt_task_cancel(h);
+    mt_task_handle_t *h = (mt_task_handle_t *)arg;
+    mt_yield();
+    mt_task_cancel(h);
 }
 
 int main(void) {
-    gt_init();
+    mt_init();
 
     int value = 0;
-    gt_go(parent, &value);
+    mt_go(parent, &value);
 
-    gt_task_handle_t *h = gt_go_handle(cancellable, NULL);
-    gt_go(canceller, h);
+    mt_task_handle_t *h = mt_go_handle(cancellable, NULL);
+    mt_go(canceller, h);
 
-    gt_run();
+    mt_run();
 
-    gt_task_status_t status;
-    if (gt_task_status(h, &status) == GT_OK) {
+    mt_task_status_t status;
+    if (mt_task_status(h, &status) == MT_OK) {
         printf("cancelled task status=%d\n", (int)status);
     }
-    gt_task_handle_release(h);
+    mt_task_handle_release(h);
 
-    gt_shutdown();
+    mt_shutdown();
     return 0;
 }

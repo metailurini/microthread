@@ -9,9 +9,9 @@ v0.1 features:
 - single OS thread
 - `ucontext` backend on Unix
 - Windows Fibers backend on Windows
-- `gt_go`
-- `gt_yield`
-- `gt_run`
+- `mt_go`
+- `mt_yield`
+- `mt_run`
 
 Out of scope for v0.1:
 
@@ -30,22 +30,22 @@ Out of scope for v0.1:
 The exact names may change, but the test plan assumes an API similar to:
 
 ```c
-typedef void (*gt_fn)(void *arg);
+typedef void (*mt_fn)(void *arg);
 
-int  gt_init(void);
-int  gt_go(gt_fn fn, void *arg);
-void gt_yield(void);
-int  gt_run(void);
-void gt_shutdown(void);
+int  mt_init(void);
+int  mt_go(mt_fn fn, void *arg);
+void mt_yield(void);
+int  mt_run(void);
+void mt_shutdown(void);
 ```
 
 Optional debug/test helpers are useful but not required in the public API:
 
 ```c
-size_t gt_debug_runnable_count(void);
-size_t gt_debug_live_task_count(void);
-size_t gt_debug_completed_task_count(void);
-int    gt_debug_current_task_id(void);
+size_t mt_debug_runnable_count(void);
+size_t mt_debug_live_task_count(void);
+size_t mt_debug_completed_task_count(void);
+int    mt_debug_current_task_id(void);
 ```
 
 ## Test Goals
@@ -53,10 +53,10 @@ int    gt_debug_current_task_id(void);
 The v0.1 test suite should prove that:
 
 1. The runtime initializes and shuts down cleanly.
-2. `gt_go` creates runnable green threads.
-3. `gt_run` executes all runnable green threads.
-4. A green thread can yield and later resume.
-5. Multiple green threads are scheduled fairly enough for cooperative execution.
+2. `mt_go` creates runnable microthreads.
+3. `mt_run` executes all runnable microthreads.
+4. A microthread can yield and later resume.
+5. Multiple microthreads are scheduled fairly enough for cooperative execution.
 6. Green threads can return normally without corrupting scheduler state.
 7. Nested or reentrant misuse is handled safely or explicitly rejected.
 8. Invalid inputs are handled predictably.
@@ -120,9 +120,9 @@ The v0.1 test suite should prove that:
 
 Steps:
 
-1. Call `gt_init()`.
+1. Call `mt_init()`.
 2. Assert return value indicates success.
-3. Call `gt_shutdown()`.
+3. Call `mt_shutdown()`.
 
 Expected:
 
@@ -133,9 +133,9 @@ Expected:
 
 Steps:
 
-1. Call `gt_init()`.
-2. Call `gt_init()` again.
-3. Call `gt_shutdown()`.
+1. Call `mt_init()`.
+2. Call `mt_init()` again.
+3. Call `mt_shutdown()`.
 
 Expected:
 
@@ -146,7 +146,7 @@ Expected:
 
 Steps:
 
-1. Call `gt_shutdown()` before `gt_init()`.
+1. Call `mt_shutdown()` before `mt_init()`.
 
 Expected:
 
@@ -157,29 +157,29 @@ Expected:
 
 Steps:
 
-1. Call `gt_init()`.
-2. Call `gt_shutdown()`.
-3. Call `gt_init()` again.
-4. Create one green thread.
-5. Call `gt_run()`.
-6. Call `gt_shutdown()`.
+1. Call `mt_init()`.
+2. Call `mt_shutdown()`.
+3. Call `mt_init()` again.
+4. Create one microthread.
+5. Call `mt_run()`.
+6. Call `mt_shutdown()`.
 
 Expected:
 
 - Runtime can be cleanly reused if this is supported.
-- If reuse is unsupported, the second `gt_init()` returns a documented error.
+- If reuse is unsupported, the second `mt_init()` returns a documented error.
 
 ---
 
 ## 2. Task Creation Tests
 
-### TC-GO-001: Create one green thread
+### TC-GO-001: Create one microthread
 
 Steps:
 
 1. Initialize runtime.
-2. Call `gt_go(task_fn, &counter)`.
-3. Call `gt_run()`.
+2. Call `mt_go(task_fn, &counter)`.
+3. Call `mt_run()`.
 
 Task behavior:
 
@@ -192,51 +192,51 @@ static void task_fn(void *arg) {
 
 Expected:
 
-- `gt_go` succeeds.
-- Counter equals `1` after `gt_run()`.
+- `mt_go` succeeds.
+- Counter equals `1` after `mt_run()`.
 
-### TC-GO-002: Create multiple green threads before run
+### TC-GO-002: Create multiple microthreads before run
 
 Steps:
 
-1. Create `N = 100` green threads.
+1. Create `N = 100` microthreads.
 2. Each increments a shared counter once.
-3. Call `gt_run()`.
+3. Call `mt_run()`.
 
 Expected:
 
 - Counter equals `100`.
 - All tasks complete.
 
-### TC-GO-003: Create zero green threads then run
+### TC-GO-003: Create zero microthreads then run
 
 Steps:
 
 1. Initialize runtime.
-2. Call `gt_run()` without creating tasks.
+2. Call `mt_run()` without creating tasks.
 
 Expected:
 
-- `gt_run()` returns successfully.
+- `mt_run()` returns successfully.
 - No crash.
 
 ### TC-GO-004: Null function pointer
 
 Steps:
 
-1. Call `gt_go(NULL, arg)`.
+1. Call `mt_go(NULL, arg)`.
 
 Expected:
 
-- `gt_go` returns an error.
+- `mt_go` returns an error.
 - Runtime remains usable.
 
 ### TC-GO-005: Null argument
 
 Steps:
 
-1. Call `gt_go(task_fn_accepting_null, NULL)`.
-2. Call `gt_run()`.
+1. Call `mt_go(task_fn_accepting_null, NULL)`.
+2. Call `mt_run()`.
 
 Expected:
 
@@ -247,13 +247,13 @@ Expected:
 
 Steps:
 
-1. Parent green thread calls `gt_go(child_fn, arg)`.
+1. Parent microthread calls `mt_go(child_fn, arg)`.
 2. Parent returns or yields.
-3. Call `gt_run()`.
+3. Call `mt_run()`.
 
 Expected:
 
-- Child task runs before `gt_run()` returns.
+- Child task runs before `mt_run()` returns.
 - Scheduler handles task creation during scheduling.
 
 ### TC-GO-007: Create many tasks from inside tasks
@@ -263,7 +263,7 @@ Steps:
 1. Create one parent task.
 2. Parent creates 1,000 child tasks.
 3. Each child increments a counter.
-4. Call `gt_run()`.
+4. Call `mt_run()`.
 
 Expected:
 
@@ -275,25 +275,25 @@ Expected:
 
 ## 3. Scheduler Run Loop Tests
 
-### TC-RUN-001: `gt_run` drains all runnable tasks
+### TC-RUN-001: `mt_run` drains all runnable tasks
 
 Steps:
 
 1. Create several tasks that do not yield.
-2. Call `gt_run()`.
+2. Call `mt_run()`.
 
 Expected:
 
 - All tasks complete.
-- `gt_run()` returns only after the runnable queue is empty.
+- `mt_run()` returns only after the runnable queue is empty.
 
-### TC-RUN-002: Calling `gt_run` twice after completion
+### TC-RUN-002: Calling `mt_run` twice after completion
 
 Steps:
 
 1. Create tasks.
-2. Call `gt_run()`.
-3. Call `gt_run()` again.
+2. Call `mt_run()`.
+3. Call `mt_run()` again.
 
 Expected:
 
@@ -305,9 +305,9 @@ Expected:
 Steps:
 
 1. Create task A.
-2. Call `gt_run()`.
+2. Call `mt_run()`.
 3. Create task B.
-4. Call `gt_run()` again.
+4. Call `mt_run()` again.
 
 Expected:
 
@@ -319,17 +319,17 @@ Expected:
 Steps:
 
 1. Create one normal task.
-2. Call `gt_run()`.
+2. Call `mt_run()`.
 
 Expected:
 
 - Return code indicates success.
 
-### TC-RUN-005: Reentrant `gt_run` from green thread
+### TC-RUN-005: Reentrant `mt_run` from microthread
 
 Steps:
 
-1. A green thread calls `gt_run()`.
+1. A microthread calls `mt_run()`.
 
 Expected:
 
@@ -346,9 +346,9 @@ Steps:
 
 1. Create one task.
 2. Task increments counter.
-3. Task calls `gt_yield()`.
+3. Task calls `mt_yield()`.
 4. Task increments counter again.
-5. Call `gt_run()`.
+5. Call `mt_run()`.
 
 Expected:
 
@@ -378,7 +378,7 @@ Steps:
 
 1. Create `N = 10` tasks.
 2. Each loops `M = 1,000` times.
-3. Each iteration increments its own counter and calls `gt_yield()`.
+3. Each iteration increments its own counter and calls `mt_yield()`.
 
 Expected:
 
@@ -389,7 +389,7 @@ Expected:
 
 Steps:
 
-1. Task calls `gt_yield()` immediately.
+1. Task calls `mt_yield()` immediately.
 2. Then increments counter.
 
 Expected:
@@ -402,7 +402,7 @@ Expected:
 Steps:
 
 1. Task increments counter.
-2. Task calls `gt_yield()`.
+2. Task calls `mt_yield()`.
 3. Task returns immediately after resuming.
 
 Expected:
@@ -410,11 +410,11 @@ Expected:
 - Counter equals `1`.
 - Task cleanup is correct after resuming from final yield.
 
-### TC-YIELD-006: Yield outside green thread
+### TC-YIELD-006: Yield outside microthread
 
 Steps:
 
-1. Call `gt_yield()` from the main thread before `gt_run()`.
+1. Call `mt_yield()` from the main thread before `mt_run()`.
 
 Expected:
 
@@ -431,7 +431,7 @@ Expected:
 Steps:
 
 1. Create a task that simply returns.
-2. Call `gt_run()`.
+2. Call `mt_run()`.
 
 Expected:
 
@@ -490,7 +490,7 @@ Steps:
 Expected:
 
 - Task receives the exact pointer.
-- Field modification is visible after `gt_run()`.
+- Field modification is visible after `mt_run()`.
 
 ### TC-ARG-002: Pass different arguments to many tasks
 
@@ -511,7 +511,7 @@ Steps:
 
 1. In main, create local variable.
 2. Pass its address to a task.
-3. Call `gt_run()` before the local variable goes out of scope.
+3. Call `mt_run()` before the local variable goes out of scope.
 
 Expected:
 
@@ -545,7 +545,7 @@ Steps:
 1. Task calls function A.
 2. A calls B.
 3. B calls C.
-4. C calls `gt_yield()`.
+4. C calls `mt_yield()`.
 5. After resume, return through C, B, A.
 
 Expected:
@@ -558,7 +558,7 @@ Expected:
 Steps:
 
 1. Task recursively calls a function to depth 32.
-2. At deepest point, call `gt_yield()`.
+2. At deepest point, call `mt_yield()`.
 3. Resume and unwind recursion.
 
 Expected:
@@ -626,7 +626,7 @@ Steps:
 
 1. Create task A that performs a long CPU loop without yield.
 2. Create task B that increments counter.
-3. Call `gt_run()`.
+3. Call `mt_run()`.
 
 Expected:
 
@@ -649,22 +649,22 @@ Expected:
 
 ## 9. Error Handling Tests
 
-### TC-ERR-001: `gt_go` before `gt_init`
+### TC-ERR-001: `mt_go` before `mt_init`
 
 Steps:
 
-1. Call `gt_go(task, arg)` before initialization.
+1. Call `mt_go(task, arg)` before initialization.
 
 Expected:
 
 - Returns documented error or implicitly initializes if that behavior is documented.
 - No crash.
 
-### TC-ERR-002: `gt_run` before `gt_init`
+### TC-ERR-002: `mt_run` before `mt_init`
 
 Steps:
 
-1. Call `gt_run()` before initialization.
+1. Call `mt_run()` before initialization.
 
 Expected:
 
@@ -677,11 +677,11 @@ Steps:
 
 1. Use a fault-injection allocator.
 2. Force stack allocation or task object allocation to fail.
-3. Call `gt_go()`.
+3. Call `mt_go()`.
 
 Expected:
 
-- `gt_go()` returns error.
+- `mt_go()` returns error.
 - No partial task remains in the runnable queue.
 - No leaked resources.
 
@@ -690,11 +690,11 @@ Expected:
 Steps:
 
 1. Inject failure from context backend.
-2. Call `gt_go()`.
+2. Call `mt_go()`.
 
 Expected:
 
-- `gt_go()` returns error.
+- `mt_go()` returns error.
 - Allocated stack and task object are freed.
 
 ### TC-ERR-005: Runtime shutdown with pending tasks
@@ -703,7 +703,7 @@ Steps:
 
 1. Initialize runtime.
 2. Create tasks.
-3. Call `gt_shutdown()` without `gt_run()`.
+3. Call `mt_shutdown()` without `mt_run()`.
 
 Expected:
 
@@ -794,7 +794,7 @@ Steps:
 
 1. Task calls helper function.
 2. Helper calls another function pointer callback.
-3. Callback calls `gt_yield()`.
+3. Callback calls `mt_yield()`.
 
 Expected:
 
@@ -837,10 +837,10 @@ Expected:
 Steps:
 
 1. Repeat 1,000 times:
-   - `gt_init()`
+   - `mt_init()`
    - create 10 tasks
-   - `gt_run()`
-   - `gt_shutdown()`
+   - `mt_run()`
+   - `mt_shutdown()`
 
 Expected:
 
@@ -979,7 +979,7 @@ Expected:
 
 ## 14. Misuse and Contract Tests
 
-### TC-MISUSE-001: Calling blocking OS sleep inside green thread
+### TC-MISUSE-001: Calling blocking OS sleep inside microthread
 
 Steps:
 
@@ -991,11 +991,11 @@ Expected:
 - In v0.1, Task B does not run until Task A returns from blocking sleep.
 - This confirms and documents cooperative single-thread limitation.
 
-### TC-MISUSE-002: Calling `gt_shutdown` from green thread
+### TC-MISUSE-002: Calling `mt_shutdown` from microthread
 
 Steps:
 
-1. A task calls `gt_shutdown()`.
+1. A task calls `mt_shutdown()`.
 
 Expected:
 
@@ -1006,7 +1006,7 @@ Expected:
 
 Steps:
 
-1. Attempt `setjmp` in one context and `longjmp` from another green thread.
+1. Attempt `setjmp` in one context and `longjmp` from another microthread.
 
 Expected:
 
@@ -1055,16 +1055,16 @@ static int counter;
 static void task(void *arg) {
     int *p = arg;
     (*p)++;
-    gt_yield();
+    mt_yield();
     (*p)++;
 }
 
 int main(void) {
-    assert(gt_init() == 0);
-    assert(gt_go(task, &counter) == 0);
-    assert(gt_run() == 0);
+    assert(mt_init() == 0);
+    assert(mt_go(task, &counter) == 0);
+    assert(mt_run() == 0);
     assert(counter == 2);
-    gt_shutdown();
+    mt_shutdown();
     return 0;
 }
 ```

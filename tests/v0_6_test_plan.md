@@ -9,7 +9,7 @@ used as the source of truth for the v0.6 test suite, bug triage, and acceptance.
 
 Assumed previous implemented/core features:
 
-- v0.1: green threads, yield, run queue
+- v0.1: microthreads, yield, run queue
 - v0.2: sleep/timers and guarded/custom stacks
 - v0.3: buffered/unbuffered channels
 - v0.4: task handles, join, cooperative cancellation
@@ -20,12 +20,12 @@ If v0.4 or v0.5 is not implemented when v0.6 starts, those integration cases rem
 ## Proposed v0.6 API Scope
 
 ```c
-int gt_runtime_start(size_t worker_count);
-int gt_runtime_workers(void);
-int gt_run_workers(size_t worker_count); /* optional convenience */
+int mt_runtime_start(size_t worker_count);
+int mt_runtime_workers(void);
+int mt_run_workers(size_t worker_count); /* optional convenience */
 ```
 
-Existing APIs such as `gt_go`, `gt_go_handle`, `gt_yield`, `gt_sleep_ms`,
+Existing APIs such as `mt_go`, `mt_go_handle`, `mt_yield`, `mt_sleep_ms`,
 channels, join, cancellation, and select must work safely across workers.
 
 ## Scheduler Policy Under Test
@@ -68,8 +68,8 @@ Tests are grouped as:
 - **TC-V06-REG-005**: implemented v0.5 select tests pass in single-worker mode.
 - **TC-V06-REG-006**: public API preserves old single-worker behavior when worker
   count is 1.
-- **TC-V06-REG-007**: old `gt_run()` still works after adding `gt_runtime_start()`.
-- **TC-V06-REG-008**: `gt_run_workers(1)` and `gt_runtime_start(1)` behave like
+- **TC-V06-REG-007**: old `mt_run()` still works after adding `mt_runtime_start()`.
+- **TC-V06-REG-008**: `mt_run_workers(1)` and `mt_runtime_start(1)` behave like
   the documented single-worker runner.
 - **TC-V06-REG-009**: all public examples still compile and run.
 
@@ -77,20 +77,20 @@ Tests are grouped as:
 
 - **TC-WORKER-INIT-001**: starting with 1 worker succeeds.
 - **TC-WORKER-INIT-002**: starting with N workers succeeds for N > 1.
-- **TC-WORKER-INIT-003**: `worker_count == 0` returns `GT_ERR_INVALID` or maps to
+- **TC-WORKER-INIT-003**: `worker_count == 0` returns `MT_ERR_INVALID` or maps to
   a documented default; undocumented behavior fails.
 - **TC-WORKER-INIT-004**: repeated start/shutdown cycles work with 1, 2, and 4
   workers.
-- **TC-WORKER-INIT-005**: starting while already running returns `GT_ERR_STATE`.
-- **TC-WORKER-INIT-006**: starting from inside a green thread returns
-  `GT_ERR_STATE` and does not corrupt the active runtime.
+- **TC-WORKER-INIT-005**: starting while already running returns `MT_ERR_STATE`.
+- **TC-WORKER-INIT-006**: starting from inside a microthread returns
+  `MT_ERR_STATE` and does not corrupt the active runtime.
 - **TC-WORKER-INIT-007**: worker allocation failure cleans up partially allocated
   worker state.
 - **TC-WORKER-INIT-008**: worker thread creation failure cleans up already started
   workers and leaves the runtime reusable.
 - **TC-WORKER-INIT-009**: mutex/condition-variable initialization failure cleans
   up and leaves the runtime reusable.
-- **TC-WORKER-INIT-010**: `gt_runtime_workers()` returns 0 before start, the
+- **TC-WORKER-INIT-010**: `mt_runtime_workers()` returns 0 before start, the
   configured count while running, and 0 again after shutdown/run completion.
 - **TC-WORKER-INIT-011**: worker count is stable and visible to all workers while
   the runtime is running.
@@ -154,7 +154,7 @@ Tests are grouped as:
 - **TC-RUNQ-SHARED-003**: shared queue FIFO behavior is reasonable for tasks that
   do not block, without requiring a strict cross-worker ordering guarantee.
 - **TC-RUNQ-SHARED-004**: shared queue lock contention does not deadlock when tasks
-  perform nested runtime operations such as `gt_go()` or channel wakeups.
+  perform nested runtime operations such as `mt_go()` or channel wakeups.
 
 ### Policy-specific: local queues plus work stealing
 
@@ -168,13 +168,13 @@ Tests are grouped as:
   race-free.
 - **TC-RUNQ-STEAL-007**: stealing policy avoids starvation across workers.
 
-## 5. Concurrent `gt_go()` and Task Creation Tests
+## 5. Concurrent `mt_go()` and Task Creation Tests
 
-- **TC-GO-MT-001**: many external OS threads call `gt_go()` concurrently before
+- **TC-GO-MT-001**: many external OS threads call `mt_go()` concurrently before
   the runtime starts.
-- **TC-GO-MT-002**: many external OS threads call `gt_go()` while the runtime is
+- **TC-GO-MT-002**: many external OS threads call `mt_go()` while the runtime is
   already running.
-- **TC-GO-MT-003**: many green threads call `gt_go()` concurrently from different
+- **TC-GO-MT-003**: many microthreads call `mt_go()` concurrently from different
   workers.
 - **TC-GO-MT-004**: task IDs remain unique under concurrent creation.
 - **TC-GO-MT-005**: allocation failure under concurrent creation does not corrupt
@@ -199,7 +199,7 @@ Tests are grouped as:
   under multi-worker load.
 - **TC-YIELD-MT-005**: task migration does not invalidate stack metadata or guard
   metadata.
-- **TC-YIELD-MT-006**: yield outside a green thread remains safe and returns the
+- **TC-YIELD-MT-006**: yield outside a microthread remains safe and returns the
   documented status.
 - **TC-YIELD-MT-007**: yielding while holding no runtime lock cannot deadlock other
   workers.
@@ -259,7 +259,7 @@ Tests are grouped as:
   races with wakeups.
 - **TC-CHAN-MT-016**: no lost wakeup when a sender/receiver arrives concurrently
   with a peer parking.
-- **TC-CHAN-MT-017**: channel operations from outside green threads return
+- **TC-CHAN-MT-017**: channel operations from outside microthreads return
   documented errors and do not corrupt channel state.
 - **TC-CHAN-MT-018**: channel destroy racing with concurrent try operations is safe
   under the documented ownership/lifetime policy.
@@ -318,7 +318,7 @@ Tests are grouped as:
 - **TC-SELECT-MT-016**: immediate ready scan under concurrent close/send/recv
   returns one valid result without corrupting queues.
 - **TC-SELECT-MT-017**: duplicate default/timeout validation remains thread-safe.
-- **TC-SELECT-MT-018**: select called outside a green thread returns documented
+- **TC-SELECT-MT-018**: select called outside a microthread returns documented
   status and does not allocate waiters.
 
 ## 11. Deadlock and Idle Worker Detection
@@ -350,7 +350,7 @@ Tests are grouped as:
 - **TC-SHUT-MT-005**: shutdown with channel waiters pending is safe.
 - **TC-SHUT-MT-006**: shutdown with join/select waiters pending is safe.
 - **TC-SHUT-MT-007**: repeated multi-worker init/run/shutdown cycles do not leak.
-- **TC-SHUT-MT-008**: shutdown while external OS threads are attempting `gt_go()`
+- **TC-SHUT-MT-008**: shutdown while external OS threads are attempting `mt_go()`
   follows a documented success/failure policy and does not leak.
 - **TC-SHUT-MT-009**: runtime can be reused after a deadlock result.
 - **TC-SHUT-MT-010**: runtime can be reused after an error result from worker
@@ -413,8 +413,8 @@ Tests are grouped as:
   test hooks.
 - **TC-RACE-MT-006**: ASan/UBSan still pass where supported.
 - **TC-RACE-MT-007**: Valgrind/Helgrind/DRD-style checks pass where available.
-- **TC-RACE-MT-008**: sanitizer tests include external OS-thread `gt_go()` and
-  internal green-thread `gt_go()` workloads.
+- **TC-RACE-MT-008**: sanitizer tests include external OS-thread `mt_go()` and
+  internal green-thread `mt_go()` workloads.
 
 ## 16. Stress Tests
 
@@ -442,7 +442,7 @@ Tests are grouped as:
 - **TC-DOC-MT-003**: README documents channel lifetime requirements under
   concurrent close/destroy/use.
 - **TC-DOC-MT-004**: README documents runtime lifecycle rules for task creation
-  before, during, and after `gt_runtime_start()`.
+  before, during, and after `mt_runtime_start()`.
 - **TC-DOC-MT-005**: README documents whether tasks may migrate between workers.
 - **TC-DOC-MT-006**: README documents sanitizer/stress targets and known platform
   limitations.

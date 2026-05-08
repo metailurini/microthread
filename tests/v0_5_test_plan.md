@@ -5,31 +5,31 @@ v0.5 is a core-runtime feature release. It does not add networking. It builds on
 Main goals:
 
 - add nonblocking channel operations
-- add a channel-only `gt_select()` style API
+- add a channel-only `mt_select()` style API
 - support default cases and timeout cases
 - keep scheduler, timer, channel, join, and cancellation behavior correct
 
 ## Proposed API Scope
 
 ```c
-int gt_chan_try_send(gt_chan_t *ch, const void *value);
-int gt_chan_try_recv(gt_chan_t *ch, void *out);
+int mt_chan_try_send(mt_chan_t *ch, const void *value);
+int mt_chan_try_recv(mt_chan_t *ch, void *out);
 
-typedef enum gt_select_op {
-    GT_SELECT_RECV,
-    GT_SELECT_SEND,
-    GT_SELECT_DEFAULT,
-    GT_SELECT_TIMEOUT
-} gt_select_op_t;
+typedef enum mt_select_op {
+    MT_SELECT_RECV,
+    MT_SELECT_SEND,
+    MT_SELECT_DEFAULT,
+    MT_SELECT_TIMEOUT
+} mt_select_op_t;
 
-typedef struct gt_select_case {
-    gt_select_op_t op;
-    gt_chan_t *ch;
+typedef struct mt_select_case {
+    mt_select_op_t op;
+    mt_chan_t *ch;
     void *value;
     uint64_t timeout_ms;
-} gt_select_case_t;
+} mt_select_case_t;
 
-int gt_select(gt_select_case_t *cases, size_t count, size_t *selected_index);
+int mt_select(mt_select_case_t *cases, size_t count, size_t *selected_index);
 ```
 
 Exact names may change, but v0.5 should remain channel/timer focused.
@@ -49,7 +49,7 @@ Exact names may change, but v0.5 should remain channel/timer focused.
 - **TC-TRY-SEND-004**: try-send to unbuffered channel without receiver returns would-block.
 - **TC-TRY-SEND-005**: try-send to closed channel fails cleanly.
 - **TC-TRY-SEND-006**: null channel/value validation follows channel API rules.
-- **TC-TRY-SEND-007**: try-send outside a green thread works for immediate-only cases or returns documented error.
+- **TC-TRY-SEND-007**: try-send outside a microthread works for immediate-only cases or returns documented error.
 
 ## 3. Try Receive Tests
 
@@ -86,7 +86,7 @@ Exact names may change, but v0.5 should remain channel/timer focused.
 - **TC-SEL-DEFAULT-001**: default case fires when no channel case is ready.
 - **TC-SEL-DEFAULT-002**: default case does not fire when any channel case is ready.
 - **TC-SEL-DEFAULT-003**: multiple default cases are rejected or deterministic according to API contract.
-- **TC-SEL-DEFAULT-004**: default case outside a green thread follows documented behavior.
+- **TC-SEL-DEFAULT-004**: default case outside a microthread follows documented behavior.
 
 ## 7. Timeout Case Tests
 

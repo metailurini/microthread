@@ -1,47 +1,47 @@
-#include "gt.h"
+#include "microthread.h"
 
 #include <stdio.h>
 
-static gt_chan_t *g_ch;
+static mt_chan_t *g_ch;
 
 static void producer(void *arg) {
     (void)arg;
     for (int i = 1; i <= 5; ++i) {
         printf("send %d\n", i);
-        if (gt_chan_send(g_ch, &i) != GT_OK) {
+        if (mt_chan_send(g_ch, &i) != MT_OK) {
             printf("send failed\n");
             return;
         }
     }
-    gt_chan_close(g_ch);
+    mt_chan_close(g_ch);
 }
 
 static void consumer(void *arg) {
     (void)arg;
     int value = 0;
-    while (gt_chan_recv(g_ch, &value) == GT_OK) {
+    while (mt_chan_recv(g_ch, &value) == MT_OK) {
         printf("recv %d\n", value);
-        gt_yield();
+        mt_yield();
     }
     printf("channel closed\n");
 }
 
 int main(void) {
-    if (gt_init() != GT_OK) {
+    if (mt_init() != MT_OK) {
         return 1;
     }
 
-    g_ch = gt_chan_create(sizeof(int), 2);
+    g_ch = mt_chan_create(sizeof(int), 2);
     if (!g_ch) {
         return 1;
     }
 
-    gt_go(producer, NULL);
-    gt_go(consumer, NULL);
+    mt_go(producer, NULL);
+    mt_go(consumer, NULL);
 
-    int rc = gt_run();
-    int destroy_rc = gt_chan_destroy(g_ch);
-    gt_shutdown();
+    int rc = mt_run();
+    int destroy_rc = mt_chan_destroy(g_ch);
+    mt_shutdown();
 
-    return rc == GT_OK && destroy_rc == GT_OK ? 0 : 1;
+    return rc == MT_OK && destroy_rc == MT_OK ? 0 : 1;
 }

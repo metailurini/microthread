@@ -1,11 +1,11 @@
-#include "gt.h"
+#include "microthread.h"
 
 #include <stdio.h>
 
 static void sleeper(void *arg) {
     const char *name = (const char *)arg;
     printf("%s: before sleep\n", name);
-    gt_sleep_ms(25);
+    mt_sleep_ms(25);
     printf("%s: after sleep\n", name);
 }
 
@@ -13,26 +13,26 @@ static void yielder(void *arg) {
     const char *name = (const char *)arg;
     for (int i = 0; i < 3; ++i) {
         printf("%s: step %d\n", name, i);
-        gt_yield();
+        mt_yield();
     }
 }
 
 int main(void) {
-    if (gt_init() != GT_OK) {
+    if (mt_init() != MT_OK) {
         return 1;
     }
 
-    if (gt_go_with_stack(sleeper, "sleep-A", 128u * 1024u) < 0) {
+    if (mt_go_with_stack(sleeper, "sleep-A", 128u * 1024u) < 0) {
         return 1;
     }
-    if (gt_go(yielder, "yield-B") < 0) {
-        return 1;
-    }
-
-    if (gt_run() != GT_OK) {
+    if (mt_go(yielder, "yield-B") < 0) {
         return 1;
     }
 
-    gt_shutdown();
+    if (mt_run() != MT_OK) {
+        return 1;
+    }
+
+    mt_shutdown();
     return 0;
 }

@@ -1,9 +1,9 @@
 #if defined(__APPLE__) && defined(__x86_64__)
 
 .text
-.globl _gt_ctx_switch_asm
+.globl _mt_ctx_switch_asm
 .p2align 4, 0x90
-_gt_ctx_switch_asm:
+_mt_ctx_switch_asm:
     movq %rsp, 0(%rdi)
     movq %r15, 8(%rdi)
     movq %r14, 16(%rdi)
@@ -21,21 +21,21 @@ _gt_ctx_switch_asm:
     movq 48(%rsi), %rbp
     ret
 
-.globl _gt_ctx_start
+.globl _mt_ctx_start
 .p2align 4, 0x90
-_gt_ctx_start:
+_mt_ctx_start:
     subq $8, %rsp
     movq %r12, %rdi
     movq %r13, %rsi
-    callq _gt_ctx_entry
+    callq _mt_ctx_entry
     ud2
 
 #elif defined(__APPLE__) && defined(__aarch64__)
 
 .text
-.globl _gt_ctx_switch_asm
+.globl _mt_ctx_switch_asm
 .p2align 2
-_gt_ctx_switch_asm:
+_mt_ctx_switch_asm:
     mov x9, sp
     str x9, [x0, #0]
     stp x19, x20, [x0, #8]
@@ -55,12 +55,12 @@ _gt_ctx_switch_asm:
     mov sp, x9
     ret
 
-.globl _gt_ctx_start
+.globl _mt_ctx_start
 .p2align 2
-_gt_ctx_start:
+_mt_ctx_start:
     mov x0, x19
     mov x1, x20
-    bl _gt_ctx_entry
+    bl _mt_ctx_entry
     brk #0
 
 #endif

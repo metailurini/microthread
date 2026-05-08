@@ -1,18 +1,18 @@
-#ifndef GT_CONTEXT_H
-#define GT_CONTEXT_H
+#ifndef MT_CONTEXT_H
+#define MT_CONTEXT_H
 
 #include <stddef.h>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-typedef struct gt_context {
+typedef struct mt_context {
     void *fiber;
     void *data;
     int owns_fiber;
-} gt_context_t;
+} mt_context_t;
 #elif defined(__APPLE__) && (defined(__x86_64__) || defined(__aarch64__))
-typedef struct gt_context {
+typedef struct mt_context {
 #if defined(__x86_64__)
     void *rsp;
     void *r15;
@@ -36,21 +36,21 @@ typedef struct gt_context {
     void *fp;
     void *lr;
 #endif
-} gt_context_t;
+} mt_context_t;
 #else
 #include <ucontext.h>
-typedef struct gt_context {
+typedef struct mt_context {
     ucontext_t uc;
-} gt_context_t;
+} mt_context_t;
 #endif
 
-int  gt_ctx_init_scheduler(gt_context_t *ctx);
-int  gt_ctx_make(gt_context_t *ctx,
+int  mt_ctx_init_scheduler(mt_context_t *ctx);
+int  mt_ctx_make(mt_context_t *ctx,
                  void *stack,
                  size_t stack_size,
                  void (*entry)(void *),
                  void *arg);
-void gt_ctx_switch(gt_context_t *from, gt_context_t *to);
-void gt_ctx_destroy(gt_context_t *ctx);
+void mt_ctx_switch(mt_context_t *from, mt_context_t *to);
+void mt_ctx_destroy(mt_context_t *ctx);
 
-#endif /* GT_CONTEXT_H */
+#endif /* MT_CONTEXT_H */

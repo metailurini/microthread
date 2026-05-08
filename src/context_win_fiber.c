@@ -2,19 +2,19 @@
 
 #include "context.h"
 
-typedef struct gt_win_entry_arg {
+typedef struct mt_win_entry_arg {
     void (*entry)(void *);
     void *arg;
-} gt_win_entry_arg_t;
+} mt_win_entry_arg_t;
 
-static VOID CALLBACK gt_fiber_entry(void *raw) {
-    gt_win_entry_arg_t *entry_arg = (gt_win_entry_arg_t *)raw;
+static VOID CALLBACK mt_fiber_entry(void *raw) {
+    mt_win_entry_arg_t *entry_arg = (mt_win_entry_arg_t *)raw;
     entry_arg->entry(entry_arg->arg);
     /* The runtime entry function should never return. */
     ExitThread(1);
 }
 
-int gt_ctx_init_scheduler(gt_context_t *ctx) {
+int mt_ctx_init_scheduler(mt_context_t *ctx) {
     if (!ctx) {
         return -1;
     }
@@ -36,7 +36,7 @@ int gt_ctx_init_scheduler(gt_context_t *ctx) {
     return ctx->fiber ? 0 : -1;
 }
 
-int gt_ctx_make(gt_context_t *ctx,
+int mt_ctx_make(mt_context_t *ctx,
                 void *stack,
                 size_t stack_size,
                 void (*entry)(void *),
@@ -47,8 +47,8 @@ int gt_ctx_make(gt_context_t *ctx,
 
     (void)stack;
 
-    gt_win_entry_arg_t *entry_arg =
-        (gt_win_entry_arg_t *)HeapAlloc(GetProcessHeap(), 0, sizeof(*entry_arg));
+    mt_win_entry_arg_t *entry_arg =
+        (mt_win_entry_arg_t *)HeapAlloc(GetProcessHeap(), 0, sizeof(*entry_arg));
     if (!entry_arg) {
         return -1;
     }
@@ -56,7 +56,7 @@ int gt_ctx_make(gt_context_t *ctx,
     entry_arg->entry = entry;
     entry_arg->arg = arg;
 
-    ctx->fiber = CreateFiber(stack_size, gt_fiber_entry, entry_arg);
+    ctx->fiber = CreateFiber(stack_size, mt_fiber_entry, entry_arg);
     ctx->data = entry_arg;
     ctx->owns_fiber = 1;
     if (!ctx->fiber) {
@@ -67,12 +67,12 @@ int gt_ctx_make(gt_context_t *ctx,
     return 0;
 }
 
-void gt_ctx_switch(gt_context_t *from, gt_context_t *to) {
+void mt_ctx_switch(mt_context_t *from, mt_context_t *to) {
     (void)from;
     SwitchToFiber(to->fiber);
 }
 
-void gt_ctx_destroy(gt_context_t *ctx) {
+void mt_ctx_destroy(mt_context_t *ctx) {
     if (!ctx || !ctx->fiber) {
         return;
     }
