@@ -30,6 +30,13 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/epoll.h>
+#define MT_HAVE_EPOLL 1
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+#include <sys/event.h>
+#define MT_HAVE_KQUEUE 1
+#endif
 #define MT_HAS_OS_THREADS 1
 #if !defined(MAP_ANONYMOUS) && defined(MAP_ANON)
 #define MAP_ANONYMOUS MAP_ANON
@@ -104,6 +111,12 @@ typedef struct mt_task {
     int fd_in_timer;
 } mt_task_t;
 
+typedef struct mt_fd_generation {
+    int fd;
+    uint64_t generation;
+    struct mt_fd_generation *next;
+} mt_fd_generation_t;
+
 struct mt_select_waiter {
     mt_task_t *task;
     mt_chan_t *ch;
@@ -119,10 +132,18 @@ struct mt_fd_waiter {
     mt_task_t *task;
     int fd;
     int events;
+    uint64_t generation;
     int ready_events;
     int active;
     mt_fd_waiter_t *next;
 };
+
+typedef enum mt_io_backend_kind {
+    MT_IO_BACKEND_NONE = 0,
+    MT_IO_BACKEND_POLL,
+    MT_IO_BACKEND_EPOLL,
+    MT_IO_BACKEND_KQUEUE
+} mt_io_backend_kind_t;
 
 struct mt_task_handle {
     mt_task_t *task;
@@ -197,9 +218,20 @@ typedef struct mt_runtime {
     size_t join_waiting_count;
     mt_fd_waiter_t *fd_waiters;
     size_t fd_waiting_count;
+    mt_fd_generation_t *fd_generations;
+    mt_io_backend_kind_t io_backend_kind;
+    int io_backend_fd;
+    int io_wake_read_fd;
+    int io_wake_write_fd;
+    int io_polling;
 } mt_runtime_t;
 
 static mt_runtime_t g_rt;
+
+static void mt_io_backend_wake(void);
+static int mt_io_backend_init(void);
+static void mt_io_backend_shutdown(void);
+static const char *mt_io_backend_name_locked(void);
 
 #if MT_HAS_OS_THREADS
 static __thread mt_task_t *g_tls_current;
@@ -231,6 +263,7 @@ static void mt_notify_one(void) {
 #if MT_HAS_OS_THREADS
     if (g_rt.initialized) {
         pthread_cond_signal(&g_rt.cond);
+        mt_io_backend_wake();
     }
 #endif
 }
@@ -239,6 +272,7 @@ static void mt_notify_all(void) {
 #if MT_HAS_OS_THREADS
     if (g_rt.initialized) {
         pthread_cond_broadcast(&g_rt.cond);
+        mt_io_backend_wake();
     }
 #endif
 }
@@ -253,8 +287,12 @@ static mt_context_t *mt_current_scheduler_ctx(void) {
 
 static void mt_runq_push(mt_task_t *task);
 static void mt_select_timeout_ready(mt_task_t *task);
+static void mt_fd_ready_waiter(mt_fd_waiter_t *waiter, int result, int ready_events);
 static void mt_fd_timeout_ready(mt_task_t *task);
 static void mt_poll_fd_waiters_once(uint64_t now_ns);
+#if MT_HAS_OS_THREADS
+static void mt_cond_timedwait_ns(uint64_t delay_ns);
+#endif
 
 static void mt_task_register(mt_task_t *task) {
     task->all_next = g_rt.all_tasks;
@@ -1171,6 +1209,8 @@ static void mt_chan_ready_waiter(mt_task_t *task, int result) {
 }
 
 #if !defined(_WIN32)
+#define MT_IO_WAKE_SENTINEL (-1)
+
 static short mt_fd_events_to_poll(int events) {
     short pevents = 0;
     if (events & MT_FD_READ) {
@@ -1193,21 +1233,281 @@ static int mt_poll_revents_to_fd_events(short revents) {
     return events;
 }
 
-static int mt_fd_waiter_conflicts(int fd, int events) {
+static int mt_fd_events_from_backend(int events) {
+    int out = 0;
+#if defined(MT_HAVE_EPOLL)
+    if (events & (EPOLLIN | EPOLLHUP | EPOLLERR)) {
+        out |= MT_FD_READ;
+    }
+    if (events & (EPOLLOUT | EPOLLHUP | EPOLLERR)) {
+        out |= MT_FD_WRITE;
+    }
+#else
+    (void)events;
+#endif
+    return out;
+}
+
+static uint64_t mt_fd_generation_current(int fd) {
+    for (mt_fd_generation_t *g = g_rt.fd_generations; g; g = g->next) {
+        if (g->fd == fd) {
+            return g->generation;
+        }
+    }
+    mt_fd_generation_t *g = (mt_fd_generation_t *)calloc(1, sizeof(*g));
+    if (!g) {
+        return 0;
+    }
+    g->fd = fd;
+    g->generation = 1;
+    g->next = g_rt.fd_generations;
+    g_rt.fd_generations = g;
+    return g->generation;
+}
+
+static void mt_fd_generation_bump(int fd) {
+    for (mt_fd_generation_t *g = g_rt.fd_generations; g; g = g->next) {
+        if (g->fd == fd) {
+            g->generation++;
+            if (g->generation == 0) {
+                g->generation = 1;
+            }
+            return;
+        }
+    }
+    mt_fd_generation_t *g = (mt_fd_generation_t *)calloc(1, sizeof(*g));
+    if (!g) {
+        return;
+    }
+    g->fd = fd;
+    g->generation = 2;
+    g->next = g_rt.fd_generations;
+    g_rt.fd_generations = g;
+}
+
+static void mt_io_drain_wake_pipe(void) {
+    if (g_rt.io_wake_read_fd < 0) {
+        return;
+    }
+    char buf[128];
+    for (;;) {
+        ssize_t n = read(g_rt.io_wake_read_fd, buf, sizeof(buf));
+        if (n > 0) {
+            continue;
+        }
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        break;
+    }
+}
+
+static void mt_io_backend_wake(void) {
+    if (g_rt.io_wake_write_fd < 0) {
+        return;
+    }
+    const char b = 1;
+    ssize_t n;
+    do {
+        n = write(g_rt.io_wake_write_fd, &b, 1);
+    } while (n < 0 && errno == EINTR);
+}
+
+static int mt_io_make_wake_pipe(void) {
+    int fds[2] = {-1, -1};
+    if (pipe(fds) != 0) {
+        return MT_ERR;
+    }
+    if (mt_fd_set_nonblocking(fds[0]) != MT_OK || mt_fd_set_nonblocking(fds[1]) != MT_OK) {
+        close(fds[0]);
+        close(fds[1]);
+        return MT_ERR;
+    }
+    g_rt.io_wake_read_fd = fds[0];
+    g_rt.io_wake_write_fd = fds[1];
+    return MT_OK;
+}
+
+static int mt_io_backend_init(void) {
+    g_rt.io_backend_fd = -1;
+    g_rt.io_wake_read_fd = -1;
+    g_rt.io_wake_write_fd = -1;
+    g_rt.io_backend_kind = MT_IO_BACKEND_POLL;
+    g_rt.io_polling = 0;
+
+    if (mt_io_make_wake_pipe() != MT_OK) {
+        return MT_ERR;
+    }
+
+#if defined(MT_HAVE_EPOLL)
+    g_rt.io_backend_fd = epoll_create1(EPOLL_CLOEXEC);
+    if (g_rt.io_backend_fd < 0) {
+        return MT_ERR;
+    }
+    g_rt.io_backend_kind = MT_IO_BACKEND_EPOLL;
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN;
+    ev.data.fd = MT_IO_WAKE_SENTINEL;
+    if (epoll_ctl(g_rt.io_backend_fd, EPOLL_CTL_ADD, g_rt.io_wake_read_fd, &ev) != 0) {
+        return MT_ERR;
+    }
+#elif defined(MT_HAVE_KQUEUE)
+    g_rt.io_backend_fd = kqueue();
+    if (g_rt.io_backend_fd < 0) {
+        return MT_ERR;
+    }
+    g_rt.io_backend_kind = MT_IO_BACKEND_KQUEUE;
+    struct kevent ev;
+    EV_SET(&ev, (uintptr_t)g_rt.io_wake_read_fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, NULL);
+    if (kevent(g_rt.io_backend_fd, &ev, 1, NULL, 0, NULL) != 0) {
+        return MT_ERR;
+    }
+#endif
+    return MT_OK;
+}
+
+static void mt_io_backend_shutdown(void) {
+    if (g_rt.io_backend_fd >= 0) {
+        close(g_rt.io_backend_fd);
+        g_rt.io_backend_fd = -1;
+    }
+    if (g_rt.io_wake_read_fd >= 0) {
+        close(g_rt.io_wake_read_fd);
+        g_rt.io_wake_read_fd = -1;
+    }
+    if (g_rt.io_wake_write_fd >= 0) {
+        close(g_rt.io_wake_write_fd);
+        g_rt.io_wake_write_fd = -1;
+    }
+    mt_fd_generation_t *gen = g_rt.fd_generations;
+    while (gen) {
+        mt_fd_generation_t *next = gen->next;
+        free(gen);
+        gen = next;
+    }
+    g_rt.fd_generations = NULL;
+    g_rt.io_backend_kind = MT_IO_BACKEND_NONE;
+    g_rt.io_polling = 0;
+}
+
+static const char *mt_io_backend_name_locked(void) {
+    switch (g_rt.io_backend_kind) {
+        case MT_IO_BACKEND_EPOLL:
+            return "epoll";
+        case MT_IO_BACKEND_KQUEUE:
+            return "kqueue";
+        case MT_IO_BACKEND_POLL:
+            return "poll";
+        case MT_IO_BACKEND_NONE:
+        default:
+            return "none";
+    }
+}
+
+static int mt_io_backend_add(mt_fd_waiter_t *waiter) {
+    if (!waiter) {
+        return MT_ERR_INVALID;
+    }
+    if (g_rt.io_backend_kind == MT_IO_BACKEND_POLL) {
+        return MT_OK;
+    }
+#if defined(MT_HAVE_EPOLL)
+    if (g_rt.io_backend_kind == MT_IO_BACKEND_EPOLL) {
+        struct epoll_event ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.events = EPOLLERR | EPOLLHUP;
+        if (waiter->events & MT_FD_READ) {
+            ev.events |= EPOLLIN;
+        }
+        if (waiter->events & MT_FD_WRITE) {
+            ev.events |= EPOLLOUT;
+        }
+        ev.data.fd = waiter->fd;
+        return epoll_ctl(g_rt.io_backend_fd, EPOLL_CTL_ADD, waiter->fd, &ev) == 0
+            ? MT_OK
+            : (errno == EBADF ? MT_ERR_INVALID : MT_ERR);
+    }
+#endif
+#if defined(MT_HAVE_KQUEUE)
+    if (g_rt.io_backend_kind == MT_IO_BACKEND_KQUEUE) {
+        struct kevent evs[2];
+        int n = 0;
+        if (waiter->events & MT_FD_READ) {
+            EV_SET(&evs[n++], (uintptr_t)waiter->fd, EVFILT_READ, EV_ADD | EV_ENABLE | EV_CLEAR, 0, 0, NULL);
+        }
+        if (waiter->events & MT_FD_WRITE) {
+            EV_SET(&evs[n++], (uintptr_t)waiter->fd, EVFILT_WRITE, EV_ADD | EV_ENABLE | EV_CLEAR, 0, 0, NULL);
+        }
+        return kevent(g_rt.io_backend_fd, evs, n, NULL, 0, NULL) == 0
+            ? MT_OK
+            : (errno == EBADF ? MT_ERR_INVALID : MT_ERR);
+    }
+#endif
+    return MT_OK;
+}
+
+static void mt_io_backend_remove(mt_fd_waiter_t *waiter) {
+    if (!waiter || g_rt.io_backend_kind == MT_IO_BACKEND_POLL || g_rt.io_backend_fd < 0) {
+        return;
+    }
+#if defined(MT_HAVE_EPOLL)
+    if (g_rt.io_backend_kind == MT_IO_BACKEND_EPOLL) {
+        (void)epoll_ctl(g_rt.io_backend_fd, EPOLL_CTL_DEL, waiter->fd, NULL);
+        return;
+    }
+#endif
+#if defined(MT_HAVE_KQUEUE)
+    if (g_rt.io_backend_kind == MT_IO_BACKEND_KQUEUE) {
+        struct kevent evs[2];
+        int n = 0;
+        if (waiter->events & MT_FD_READ) {
+            EV_SET(&evs[n++], (uintptr_t)waiter->fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+        }
+        if (waiter->events & MT_FD_WRITE) {
+            EV_SET(&evs[n++], (uintptr_t)waiter->fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+        }
+        if (n > 0) {
+            (void)kevent(g_rt.io_backend_fd, evs, n, NULL, 0, NULL);
+        }
+    }
+#endif
+}
+
+static mt_fd_waiter_t *mt_fd_find_waiter(int fd, int ready_events) {
     for (mt_fd_waiter_t *w = g_rt.fd_waiters; w; w = w->next) {
-        if (w->active && w->fd == fd && (w->events & events) != 0) {
+        if (w->active && w->fd == fd && (w->events & ready_events) != 0) {
+            if (w->generation == mt_fd_generation_current(fd)) {
+                return w;
+            }
+            mt_fd_ready_waiter(w, MT_ERR_CLOSED, 0);
+            return NULL;
+        }
+    }
+    return NULL;
+}
+
+static int mt_fd_waiter_conflicts(int fd, int events) {
+    (void)events;
+    for (mt_fd_waiter_t *w = g_rt.fd_waiters; w; w = w->next) {
+        if (w->active && w->fd == fd) {
             return 1;
         }
     }
     return 0;
 }
 
-static void mt_fd_waiter_add(mt_fd_waiter_t *waiter) {
+static int mt_fd_waiter_add(mt_fd_waiter_t *waiter) {
+    int rc = mt_io_backend_add(waiter);
+    if (rc != MT_OK) {
+        return rc;
+    }
     waiter->active = 1;
     waiter->next = g_rt.fd_waiters;
     g_rt.fd_waiters = waiter;
     g_rt.fd_waiting_count++;
     mt_notify_all();
+    return MT_OK;
 }
 
 static int mt_fd_waiter_remove(mt_fd_waiter_t *waiter) {
@@ -1220,9 +1520,11 @@ static int mt_fd_waiter_remove(mt_fd_waiter_t *waiter) {
             *link = waiter->next;
             waiter->next = NULL;
             waiter->active = 0;
+            mt_io_backend_remove(waiter);
             if (g_rt.fd_waiting_count > 0) {
                 g_rt.fd_waiting_count--;
             }
+            mt_notify_all();
             return 1;
         }
         link = &(*link)->next;
@@ -1268,38 +1570,29 @@ static void mt_fd_timeout_ready(mt_task_t *task) {
     mt_runq_push(task);
 }
 
-static void mt_poll_fd_waiters_with_timeout(int timeout_ms) {
-    if (g_rt.fd_waiting_count == 0) {
-        return;
-    }
-
-    size_t count = 0;
+static void mt_poll_fd_waiters_locked(int timeout_ms) {
+    size_t count = 1;
     for (mt_fd_waiter_t *w = g_rt.fd_waiters; w; w = w->next) {
         if (w->active) {
             count++;
         }
     }
-    if (count == 0) {
-        return;
-    }
-
     struct pollfd *pfds = (struct pollfd *)calloc(count, sizeof(*pfds));
-    mt_fd_waiter_t **waiters = (mt_fd_waiter_t **)calloc(count, sizeof(*waiters));
-    if (!pfds || !waiters) {
-        free(pfds);
-        free(waiters);
+    if (!pfds) {
         return;
     }
-
     size_t i = 0;
-    for (mt_fd_waiter_t *w = g_rt.fd_waiters; w && i < count; w = w->next) {
+    pfds[i].fd = g_rt.io_wake_read_fd;
+    pfds[i].events = POLLIN;
+    pfds[i].revents = 0;
+    i++;
+    for (mt_fd_waiter_t *w = g_rt.fd_waiters; w; w = w->next) {
         if (!w->active) {
             continue;
         }
         pfds[i].fd = w->fd;
         pfds[i].events = mt_fd_events_to_poll(w->events) | POLLERR | POLLHUP;
         pfds[i].revents = 0;
-        waiters[i] = w;
         i++;
     }
     count = i;
@@ -1316,28 +1609,137 @@ static void mt_poll_fd_waiters_with_timeout(int timeout_ms) {
             if (pfds[i].revents == 0) {
                 continue;
             }
-            mt_fd_waiter_t *w = waiters[i];
-            if (!w || !w->active || w->fd != pfds[i].fd) {
+            if (pfds[i].fd == g_rt.io_wake_read_fd) {
+                mt_io_drain_wake_pipe();
                 continue;
             }
-            int ready_events = mt_poll_revents_to_fd_events(pfds[i].revents) & w->events;
+            int ready_events = mt_poll_revents_to_fd_events(pfds[i].revents);
+            mt_fd_waiter_t *w = mt_fd_find_waiter(pfds[i].fd, ready_events);
+            if (!w) {
+                continue;
+            }
+            ready_events &= w->events;
             if (ready_events == 0 && (pfds[i].revents & (POLLERR | POLLHUP | POLLNVAL))) {
                 ready_events = w->events;
             }
             mt_fd_ready_waiter(w, MT_OK, ready_events);
         }
     }
-
     free(pfds);
-    free(waiters);
+}
+
+static void mt_backend_fd_waiters_locked(int timeout_ms) {
+    if (g_rt.io_backend_kind == MT_IO_BACKEND_POLL) {
+        mt_poll_fd_waiters_locked(timeout_ms);
+        return;
+    }
+#if defined(MT_HAVE_EPOLL)
+    if (g_rt.io_backend_kind == MT_IO_BACKEND_EPOLL) {
+        struct epoll_event events[64];
+        mt_unlock();
+        int nready;
+        do {
+            nready = epoll_wait(g_rt.io_backend_fd, events, 64, timeout_ms);
+        } while (nready < 0 && errno == EINTR);
+        mt_lock();
+        if (nready > 0) {
+            for (int i = 0; i < nready; ++i) {
+                if (events[i].data.fd == MT_IO_WAKE_SENTINEL) {
+                    mt_io_drain_wake_pipe();
+                    continue;
+                }
+                int ready_events = mt_fd_events_from_backend((int)events[i].events);
+                mt_fd_waiter_t *w = mt_fd_find_waiter(events[i].data.fd, ready_events);
+                if (!w) {
+                    continue;
+                }
+                ready_events &= w->events;
+                if (ready_events == 0 && (events[i].events & (EPOLLERR | EPOLLHUP))) {
+                    ready_events = w->events;
+                }
+                mt_fd_ready_waiter(w, MT_OK, ready_events);
+            }
+        }
+        return;
+    }
+#endif
+#if defined(MT_HAVE_KQUEUE)
+    if (g_rt.io_backend_kind == MT_IO_BACKEND_KQUEUE) {
+        struct kevent events[64];
+        struct timespec ts;
+        struct timespec *tsp = NULL;
+        if (timeout_ms >= 0) {
+            ts.tv_sec = timeout_ms / 1000;
+            ts.tv_nsec = (long)(timeout_ms % 1000) * 1000000L;
+            tsp = &ts;
+        }
+        mt_unlock();
+        int nready;
+        do {
+            nready = kevent(g_rt.io_backend_fd, NULL, 0, events, 64, tsp);
+        } while (nready < 0 && errno == EINTR);
+        mt_lock();
+        if (nready > 0) {
+            for (int i = 0; i < nready; ++i) {
+                int fd = (int)events[i].ident;
+                if (fd == g_rt.io_wake_read_fd) {
+                    mt_io_drain_wake_pipe();
+                    continue;
+                }
+                int ready_events = 0;
+                if (events[i].filter == EVFILT_READ) {
+                    ready_events |= MT_FD_READ;
+                } else if (events[i].filter == EVFILT_WRITE) {
+                    ready_events |= MT_FD_WRITE;
+                }
+                if (events[i].flags & (EV_EOF | EV_ERROR)) {
+                    ready_events = MT_FD_READ | MT_FD_WRITE;
+                }
+                mt_fd_waiter_t *w = mt_fd_find_waiter(fd, ready_events);
+                if (!w) {
+                    continue;
+                }
+                ready_events &= w->events;
+                if (ready_events == 0) {
+                    ready_events = w->events;
+                }
+                mt_fd_ready_waiter(w, MT_OK, ready_events);
+            }
+        }
+        return;
+    }
+#endif
+}
+
+static void mt_poll_fd_waiters_with_timeout(int timeout_ms) {
+    if (g_rt.fd_waiting_count == 0 && g_rt.io_wake_read_fd < 0) {
+        return;
+    }
+    if (g_rt.io_polling) {
+#if MT_HAS_OS_THREADS
+        if (timeout_ms > 0) {
+            mt_cond_timedwait_ns((uint64_t)timeout_ms * MT_NS_PER_MS);
+        } else {
+            pthread_cond_wait(&g_rt.cond, &g_rt.lock);
+        }
+#endif
+        return;
+    }
+    g_rt.io_polling = 1;
+    mt_backend_fd_waiters_locked(timeout_ms);
+    g_rt.io_polling = 0;
+    mt_notify_all();
 }
 
 static void mt_poll_fd_waiters_once(uint64_t now_ns) {
     (void)now_ns;
-    mt_poll_fd_waiters_with_timeout(0);
+    if (g_rt.fd_waiting_count > 0) {
+        mt_poll_fd_waiters_with_timeout(0);
+    }
 }
 
 static void mt_fd_wake_for_close(int fd) {
+    mt_fd_generation_bump(fd);
     mt_fd_waiter_t *w = g_rt.fd_waiters;
     while (w) {
         mt_fd_waiter_t *next = w->next;
@@ -1348,6 +1750,20 @@ static void mt_fd_wake_for_close(int fd) {
     }
 }
 #else
+static void mt_io_backend_wake(void) {
+}
+
+static int mt_io_backend_init(void) {
+    return MT_OK;
+}
+
+static void mt_io_backend_shutdown(void) {
+}
+
+static const char *mt_io_backend_name_locked(void) {
+    return "unsupported";
+}
+
 static void mt_fd_timeout_ready(mt_task_t *task) {
     if (task) {
         task->state = MT_TASK_READY;
@@ -1616,6 +2032,22 @@ int mt_init(void) {
 #endif
         return MT_ERR;
     }
+#if !defined(_WIN32)
+    if (mt_io_backend_init() != MT_OK) {
+        mt_ctx_destroy(&g_rt.scheduler_ctx);
+#if MT_HAS_OS_THREADS
+        pthread_cond_destroy(&g_rt.cond);
+        pthread_mutex_destroy(&g_rt.lock);
+#endif
+        mt_io_backend_shutdown();
+        return MT_ERR;
+    }
+#else
+    g_rt.io_backend_kind = MT_IO_BACKEND_NONE;
+    g_rt.io_backend_fd = -1;
+    g_rt.io_wake_read_fd = -1;
+    g_rt.io_wake_write_fd = -1;
+#endif
 
     g_rt.initialized = 1;
     g_rt.next_id = 1;
@@ -2672,6 +3104,16 @@ int mt_fd_set_nonblocking(int fd) {
 #endif
 }
 
+const char *mt_io_backend_name(void) {
+    if (!g_rt.initialized) {
+        return "none";
+    }
+    mt_lock();
+    const char *name = mt_io_backend_name_locked();
+    mt_unlock();
+    return name;
+}
+
 int mt_fd_wait(int fd, int events, uint64_t timeout_ms, int *ready_events) {
     if (ready_events) {
         *ready_events = 0;
@@ -2719,6 +3161,7 @@ int mt_fd_wait(int fd, int events, uint64_t timeout_ms, int *ready_events) {
     waiter->task = task;
     waiter->fd = fd;
     waiter->events = events;
+    waiter->generation = mt_fd_generation_current(fd);
     task->fd_waiter = waiter;
     task->fd_result = MT_OK;
     task->fd_ready_events = 0;
@@ -2909,6 +3352,10 @@ int mt_fd_set_nonblocking(int fd) {
     return fd < 0 ? MT_ERR_INVALID : MT_ERR_STATE;
 }
 
+const char *mt_io_backend_name(void) {
+    return mt_io_backend_name_locked();
+}
+
 int mt_fd_wait(int fd, int events, uint64_t timeout_ms, int *ready_events) {
     (void)events;
     (void)timeout_ms;
@@ -3045,6 +3492,8 @@ void mt_shutdown(void) {
     g_rt.timers.items = NULL;
     g_rt.timers.len = 0;
     g_rt.timers.cap = 0;
+
+    mt_io_backend_shutdown();
 
     mt_ctx_destroy(&g_rt.scheduler_ctx);
 

@@ -123,6 +123,7 @@ int     mt_net_accept(int listen_fd, struct sockaddr *addr, socklen_t *addrlen,
 ssize_t mt_net_read(int fd, void *buf, size_t len, uint64_t timeout_ms);
 ssize_t mt_net_write(int fd, const void *buf, size_t len, uint64_t timeout_ms);
 int     mt_net_close(int fd);
+const char *mt_io_backend_name(void);
 
 size_t mt_debug_runnable_count(void);
 size_t mt_debug_live_task_count(void);

@@ -332,6 +332,7 @@ mt_fd_wait(fd, MT_FD_READ | MT_FD_WRITE, timeout_ms, &ready_events);
 mt_fd_read(fd, buf, len, timeout_ms);
 mt_fd_write(fd, buf, len, timeout_ms);
 mt_fd_close(fd);
+mt_io_backend_name();
 ```
 
 Socket convenience APIs:
@@ -344,11 +345,14 @@ int client_fd = mt_net_accept(listen_fd, NULL, NULL, 5000);
 Current implementation notes:
 
 - The public semantics are readiness-based and nonblocking for the current microthread.
-- The initial backend is a portable `poll()` backend on Unix-like platforms.
+- The runtime selects a native readiness backend when available: `epoll` on Linux, `kqueue` on macOS/BSD, and `poll` as the portable Unix fallback.
+- `mt_io_backend_name()` reports the active backend as `"epoll"`, `"kqueue"`, `"poll"`, `"none"`, or `"unsupported"`.
+- Backend resources are initialized once with the runtime and cleaned up by `mt_shutdown()`.
 - `timeout_ms == 0` means a nonblocking readiness poll.
 - `MT_ERR_TIMEOUT`, `MT_ERR_CANCELLED`, `MT_ERR_CLOSED`, and `MT_ERR_INVALID` are distinct statuses.
 - `mt_fd_close(fd)` closes the descriptor and wakes MicroThread waiters for that fd.
-- Raw `close(fd)` while a microthread is waiting on the same fd is unsupported; use `mt_fd_close(fd)`.
+- A single active waiter per descriptor is supported; overlapping waits on the same fd return `MT_ERR_STATE`.
+- Descriptor reuse is guarded for descriptors closed through `mt_fd_close(fd)`. Raw `close(fd)` while a microthread is waiting on the same fd is unsupported; use `mt_fd_close(fd)`.
 
 This is enough to build echo-server-style examples. Full HTTP parsing, routing, request limits, and production server behavior are intentionally separate future layers.
 
