@@ -1,12 +1,5 @@
 #if !defined(_WIN32)
 
-#if !defined(_XOPEN_SOURCE)
-#define _XOPEN_SOURCE 700
-#endif
-#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
-#define _DARWIN_C_SOURCE
-#endif
-
 #include "context.h"
 
 #include <stdint.h>
