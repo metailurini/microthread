@@ -1,7 +1,15 @@
 /* Internal fd/socket public API implementation.
- * This file is included by microthread.c so it can use private scheduler
- * helpers without exposing runtime internals.
+ *
+ * This file is intentionally included by src/microthread.c instead of compiled
+ * as a standalone translation unit.  Keep the public includes here so IDEs and
+ * language servers can parse the file without relying on src/microthread.c's
+ * include order; compile the implementation body only when embedded by the
+ * runtime.
  */
+
+#include "microthread.h"
+
+#ifdef MICROTHREAD_EMBEDDED_IMPL
 
 #if !defined(_WIN32)
 static int mt_fd_validate_events(int events) {
@@ -54,6 +62,7 @@ int mt_fd_set_nonblocking(int fd) {
     }
     return MT_OK;
 #endif
+
 }
 
 int mt_fd_adopt(int fd) {
@@ -499,3 +508,5 @@ int mt_net_close(int fd) {
     return mt_fd_close(fd);
 }
 #endif
+
+#endif /* MICROTHREAD_EMBEDDED_IMPL */

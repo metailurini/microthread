@@ -1,3 +1,8 @@
+#include "microthread.h"
+#include "io_backend.h"
+
+#ifdef MICROTHREAD_EMBEDDED_IMPL
+
 #if defined(MT_HAVE_EPOLL)
 static int mt_epoll_events_to_fd_events(int events) {
     int out = 0;
@@ -83,3 +88,5 @@ static void mt_epoll_backend_wait_locked(int timeout_ms) {
     }
 }
 #endif
+
+#endif /* MICROTHREAD_EMBEDDED_IMPL */

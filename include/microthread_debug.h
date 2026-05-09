@@ -1,7 +1,7 @@
 #ifndef MICROTHREAD_DEBUG_H
 #define MICROTHREAD_DEBUG_H
 
-#include "microthread.h"
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {

@@ -231,6 +231,7 @@ typedef struct mt_runtime {
 
 static mt_runtime_t g_rt;
 
+#define MICROTHREAD_EMBEDDED_IMPL 1
 #include "io_backend.h"
 
 #if MT_HAS_OS_THREADS

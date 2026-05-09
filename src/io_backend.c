@@ -1,7 +1,15 @@
 /* Internal I/O backend and fd-waiter implementation.
- * This file is included by microthread.c so it can share the private runtime
- * structs while keeping backend code out of the main scheduler file.
+ *
+ * This file is intentionally included by src/microthread.c so it can share the
+ * private runtime structs while keeping backend code out of the main scheduler
+ * file.  The includes below make standalone IDE parsing clean; the body is only
+ * compiled when embedded by the runtime.
  */
+
+#include "microthread.h"
+#include "io_backend.h"
+
+#ifdef MICROTHREAD_EMBEDDED_IMPL
 
 #if !defined(_WIN32)
 #define MT_IO_WAKE_SENTINEL (-1)
@@ -154,6 +162,7 @@ static int mt_io_backend_init(void) {
     }
     MT_TEST_COUNTER_INC(g_io_backend_inits);
 #endif
+
     g_rt.io_backend_fd = -1;
     g_rt.io_wake_read_fd = -1;
     g_rt.io_wake_write_fd = -1;
@@ -489,3 +498,5 @@ static void mt_fd_wake_for_close(int fd) {
     (void)fd;
 }
 #endif
+
+#endif /* MICROTHREAD_EMBEDDED_IMPL */

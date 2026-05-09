@@ -1,3 +1,8 @@
+#include "microthread.h"
+#include "io_backend.h"
+
+#ifdef MICROTHREAD_EMBEDDED_IMPL
+
 static short mt_fd_events_to_poll(int events) {
     short pevents = 0;
     if (events & MT_FD_READ) {
@@ -8,6 +13,7 @@ static short mt_fd_events_to_poll(int events) {
     }
     return pevents;
 }
+
 
 static int mt_poll_revents_to_fd_events(short revents) {
     int events = 0;
@@ -87,3 +93,5 @@ static void mt_poll_backend_wait_locked(int timeout_ms) {
     }
     free(pfds);
 }
+
+#endif /* MICROTHREAD_EMBEDDED_IMPL */

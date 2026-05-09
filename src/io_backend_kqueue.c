@@ -1,3 +1,8 @@
+#include "microthread.h"
+#include "io_backend.h"
+
+#ifdef MICROTHREAD_EMBEDDED_IMPL
+
 #if defined(MT_HAVE_KQUEUE)
 static int mt_kqueue_backend_init(void) {
     g_rt.io_backend_fd = kqueue();
@@ -92,3 +97,5 @@ static void mt_kqueue_backend_wait_locked(int timeout_ms) {
     }
 }
 #endif
+
+#endif /* MICROTHREAD_EMBEDDED_IMPL */
