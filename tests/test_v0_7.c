@@ -53,7 +53,7 @@ enum {
 #endif
 };
 
-static int g_fd0 = -1;
+static atomic_int g_fd0 = ATOMIC_VAR_INIT(-1);
 static int g_fd1 = -1;
 static int g_listen_fd = -1;
 static mt_task_handle_t *g_handle = NULL;
@@ -85,6 +85,21 @@ static void close_if_open(int *fd) {
     }
 }
 
+static int load_fd0(void) {
+    return atomic_load(&g_fd0);
+}
+
+static void store_fd0(int fd) {
+    atomic_store(&g_fd0, fd);
+}
+
+static void close_fd0_if_open(void) {
+    int fd = atomic_exchange(&g_fd0, -1);
+    if (fd >= 0) {
+        close(fd);
+    }
+}
+
 static void reset_runtime(void) {
     if (g_handle) {
         mt_task_handle_release(g_handle);
@@ -94,7 +109,7 @@ static void reset_runtime(void) {
         (void)mt_chan_destroy(g_ch);
         g_ch = NULL;
     }
-    close_if_open(&g_fd0);
+    close_fd0_if_open();
     close_if_open(&g_fd1);
     close_if_open(&g_listen_fd);
     mt_shutdown();
@@ -130,7 +145,7 @@ static void finish_runtime(void) {
         CHECK(mt_chan_destroy(g_ch) == MT_OK);
         g_ch = NULL;
     }
-    close_if_open(&g_fd0);
+    close_fd0_if_open();
     close_if_open(&g_fd1);
     close_if_open(&g_listen_fd);
     mt_shutdown();
@@ -170,16 +185,16 @@ static void assert_io_counters_balanced(void) {
 static void make_socketpair(void) {
     int fds[2] = { -1, -1 };
     CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
-    g_fd0 = fds[0];
+    store_fd0(fds[0]);
     g_fd1 = fds[1];
-    CHECK(mt_fd_set_nonblocking(g_fd0) == MT_OK);
+    CHECK(mt_fd_set_nonblocking(load_fd0()) == MT_OK);
     CHECK(mt_fd_set_nonblocking(g_fd1) == MT_OK);
 }
 
 static void make_blocking_socketpair(void) {
     int fds[2] = { -1, -1 };
     CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
-    g_fd0 = fds[0];
+    store_fd0(fds[0]);
     g_fd1 = fds[1];
 }
 
@@ -283,7 +298,7 @@ static void task_wait_read(void *arg) {
     (void)arg;
     int ready = 0;
     atomic_store(&g_started, 1);
-    int rc = mt_fd_wait(g_fd0, MT_FD_READ, LONG_TIMEOUT_MS, &ready);
+    int rc = mt_fd_wait(load_fd0(), MT_FD_READ, LONG_TIMEOUT_MS, &ready);
     atomic_store(&g_rc, rc);
     atomic_store(&g_ready, ready);
 }
@@ -292,7 +307,7 @@ static void task_wait_read_rc2(void *arg) {
     (void)arg;
     int ready = 0;
     atomic_fetch_add(&g_started, 1);
-    int rc = mt_fd_wait(g_fd0, MT_FD_READ, LONG_TIMEOUT_MS, &ready);
+    int rc = mt_fd_wait(load_fd0(), MT_FD_READ, LONG_TIMEOUT_MS, &ready);
     atomic_store(&g_rc2, rc);
     atomic_store(&g_ready2, ready);
 }
@@ -301,7 +316,7 @@ static void task_wait_write(void *arg) {
     (void)arg;
     int ready = 0;
     atomic_store(&g_started, 1);
-    int rc = mt_fd_wait(g_fd0, MT_FD_WRITE, LONG_TIMEOUT_MS, &ready);
+    int rc = mt_fd_wait(load_fd0(), MT_FD_WRITE, LONG_TIMEOUT_MS, &ready);
     atomic_store(&g_rc, rc);
     atomic_store(&g_ready, ready);
 }
@@ -310,7 +325,7 @@ static void task_wait_read_write(void *arg) {
     (void)arg;
     int ready = 0;
     atomic_store(&g_started, 1);
-    int rc = mt_fd_wait(g_fd0, MT_FD_READ | MT_FD_WRITE, LONG_TIMEOUT_MS, &ready);
+    int rc = mt_fd_wait(load_fd0(), MT_FD_READ | MT_FD_WRITE, LONG_TIMEOUT_MS, &ready);
     atomic_store(&g_rc, rc);
     atomic_store(&g_ready, ready);
 }
@@ -318,7 +333,7 @@ static void task_wait_read_write(void *arg) {
 static void task_wait_read_write_timeout(void *arg) {
     (void)arg;
     int ready = 111;
-    int rc = mt_fd_wait(g_fd0, MT_FD_READ | MT_FD_WRITE, SHORT_TIMEOUT_MS, &ready);
+    int rc = mt_fd_wait(load_fd0(), MT_FD_READ | MT_FD_WRITE, SHORT_TIMEOUT_MS, &ready);
     atomic_store(&g_rc, rc);
     atomic_store(&g_ready, ready);
 }
@@ -374,8 +389,8 @@ static void task_close_waited_fd_after_sleep(void *arg) {
         mt_yield();
     }
     mt_sleep_ms(5);
-    CHECK(mt_fd_close(g_fd0) == MT_OK);
-    g_fd0 = -1;
+    CHECK(mt_fd_close(load_fd0()) == MT_OK);
+    store_fd0(-1);
 }
 
 static void task_drain_peer_after_sleep(void *arg) {
@@ -400,7 +415,7 @@ static void task_read_wrapper(void *arg) {
     (void)arg;
     char buf[16] = {0};
     atomic_store(&g_started, 1);
-    ssize_t n = mt_fd_read(g_fd0, buf, sizeof(buf), LONG_TIMEOUT_MS);
+    ssize_t n = mt_fd_read(load_fd0(), buf, sizeof(buf), LONG_TIMEOUT_MS);
     atomic_store(&g_rc, (int)n);
     if (n > 0 && memcmp(buf, "hello", 5) == 0) {
         atomic_store(&g_value, 1);
@@ -410,20 +425,20 @@ static void task_read_wrapper(void *arg) {
 static void task_read_eof_wrapper(void *arg) {
     (void)arg;
     char buf[16];
-    ssize_t n = mt_fd_read(g_fd0, buf, sizeof(buf), LONG_TIMEOUT_MS);
+    ssize_t n = mt_fd_read(load_fd0(), buf, sizeof(buf), LONG_TIMEOUT_MS);
     atomic_store(&g_rc, (int)n);
 }
 
 static void task_write_wrapper(void *arg) {
     const char *msg = (const char *)arg;
     atomic_store(&g_started, 1);
-    ssize_t n = mt_fd_write(g_fd0, msg, strlen(msg), LONG_TIMEOUT_MS);
+    ssize_t n = mt_fd_write(load_fd0(), msg, strlen(msg), LONG_TIMEOUT_MS);
     atomic_store(&g_rc, (int)n);
 }
 
 static void task_net_write_wrapper(void *arg) {
     const char *msg = (const char *)arg;
-    ssize_t n = mt_net_write(g_fd0, msg, strlen(msg), LONG_TIMEOUT_MS);
+    ssize_t n = mt_net_write(load_fd0(), msg, strlen(msg), LONG_TIMEOUT_MS);
     atomic_store(&g_rc, (int)n);
 }
 
@@ -431,7 +446,7 @@ static void task_wait_read_timeout(void *arg) {
     (void)arg;
     int ready = 111;
     atomic_store(&g_started, 1);
-    int rc = mt_fd_wait(g_fd0, MT_FD_READ, SHORT_TIMEOUT_MS, &ready);
+    int rc = mt_fd_wait(load_fd0(), MT_FD_READ, SHORT_TIMEOUT_MS, &ready);
     atomic_store(&g_rc, rc);
     atomic_store(&g_ready, ready);
 }
@@ -440,7 +455,7 @@ static void task_wait_write_timeout(void *arg) {
     (void)arg;
     int ready = 111;
     atomic_store(&g_started, 1);
-    int rc = mt_fd_wait(g_fd0, MT_FD_WRITE, SHORT_TIMEOUT_MS, &ready);
+    int rc = mt_fd_wait(load_fd0(), MT_FD_WRITE, SHORT_TIMEOUT_MS, &ready);
     atomic_store(&g_rc, rc);
     atomic_store(&g_ready, ready);
 }
@@ -472,7 +487,7 @@ static void task_wait_read_cancellable(void *arg) {
     (void)arg;
     int ready = 0;
     atomic_store(&g_started, 1);
-    int rc = mt_fd_wait(g_fd0, MT_FD_READ, LONG_TIMEOUT_MS, &ready);
+    int rc = mt_fd_wait(load_fd0(), MT_FD_READ, LONG_TIMEOUT_MS, &ready);
     atomic_store(&g_rc, rc);
     atomic_store(&g_ready, ready);
     atomic_store(&g_value, mt_task_cancelled());
@@ -484,10 +499,10 @@ static void task_duplicate_waiter(void *arg) {
         mt_yield();
     }
     int ready = 0;
-    int rc = mt_fd_wait(g_fd0, MT_FD_READ, SHORT_TIMEOUT_MS, &ready);
+    int rc = mt_fd_wait(load_fd0(), MT_FD_READ, SHORT_TIMEOUT_MS, &ready);
     atomic_store(&g_rc2, rc);
-    CHECK(mt_fd_close(g_fd0) == MT_OK);
-    g_fd0 = -1;
+    CHECK(mt_fd_close(load_fd0()) == MT_OK);
+    store_fd0(-1);
 }
 
 static void task_duplicate_ready_waiter(void *arg) {
@@ -498,18 +513,18 @@ static void task_duplicate_ready_waiter(void *arg) {
     char c = 'r';
     CHECK(write(g_fd1, &c, 1) == 1);
     int ready = 0;
-    int rc = mt_fd_wait(g_fd0, MT_FD_READ, SHORT_TIMEOUT_MS, &ready);
+    int rc = mt_fd_wait(load_fd0(), MT_FD_READ, SHORT_TIMEOUT_MS, &ready);
     atomic_store(&g_rc2, rc);
     atomic_store(&g_ready, ready);
-    CHECK(mt_fd_close(g_fd0) == MT_OK);
-    g_fd0 = -1;
+    CHECK(mt_fd_close(load_fd0()) == MT_OK);
+    store_fd0(-1);
 }
 
 static void task_blocking_fd_read_timeout(void *arg) {
     (void)arg;
     char c = 0;
     atomic_store(&g_started, 1);
-    ssize_t n = mt_fd_read(g_fd0, &c, 1, SHORT_TIMEOUT_MS);
+    ssize_t n = mt_fd_read(load_fd0(), &c, 1, SHORT_TIMEOUT_MS);
     atomic_store(&g_rc, (int)n);
 }
 
@@ -520,7 +535,7 @@ static void task_close_race_waiter(void *arg) {
     }
     mt_sleep_ms(5);
     int ready = 0;
-    int rc = mt_fd_wait(g_fd0, MT_FD_READ, SHORT_TIMEOUT_MS, &ready);
+    int rc = mt_fd_wait(load_fd0(), MT_FD_READ, SHORT_TIMEOUT_MS, &ready);
     atomic_store(&g_rc2, rc);
 }
 
@@ -529,15 +544,15 @@ static void task_release_active_waiter(void *arg) {
     while (mt_debug_fd_waiting_task_count() == 0) {
         mt_yield();
     }
-    atomic_store(&g_rc2, mt_fd_release(g_fd0));
-    CHECK(mt_fd_close(g_fd0) == MT_OK);
-    g_fd0 = -1;
+    atomic_store(&g_rc2, mt_fd_release(load_fd0()));
+    CHECK(mt_fd_close(load_fd0()) == MT_OK);
+    store_fd0(-1);
 }
 
 static void task_wait_read_then_joinable(void *arg) {
     (void)arg;
     char c = 0;
-    ssize_t n = mt_fd_read(g_fd0, &c, 1, LONG_TIMEOUT_MS);
+    ssize_t n = mt_fd_read(load_fd0(), &c, 1, LONG_TIMEOUT_MS);
     CHECK(n == 1);
     atomic_store(&g_value, (int)c);
 }
@@ -585,7 +600,7 @@ static void task_select_sender_after_sleep(void *arg) {
 static void task_fd_reader_sends_channel(void *arg) {
     (void)arg;
     char c = 0;
-    ssize_t n = mt_fd_read(g_fd0, &c, 1, LONG_TIMEOUT_MS);
+    ssize_t n = mt_fd_read(load_fd0(), &c, 1, LONG_TIMEOUT_MS);
     CHECK(n == 1);
     int v = (int)c;
     CHECK(mt_chan_send(g_ch, &v) == MT_OK);
@@ -734,7 +749,7 @@ static void task_large_reader(void *arg) {
     char buf[4096];
     long total = 0;
     while (total < LARGE_BYTES) {
-        ssize_t n = mt_fd_read(g_fd0, buf, sizeof(buf), LONG_TIMEOUT_MS);
+        ssize_t n = mt_fd_read(load_fd0(), buf, sizeof(buf), LONG_TIMEOUT_MS);
         CHECK(n > 0);
         total += n;
     }
@@ -808,25 +823,25 @@ static void test_backend_lifecycle_and_reporting(void) {
 static void test_nonblocking_validation_and_immediate_ready(void) {
     reset_runtime();
     make_socketpair();
-    CHECK(mt_fd_set_nonblocking(g_fd0) == MT_OK);
-    CHECK(mt_fd_set_nonblocking(g_fd0) == MT_OK);
-    CHECK(mt_fd_adopt(g_fd0) == MT_OK);
-    CHECK(mt_fd_release(g_fd0) == MT_OK);
-    CHECK(mt_fd_adopt(g_fd0) == MT_OK);
-    assert_fd_nonblocking(g_fd0);
+    CHECK(mt_fd_set_nonblocking(load_fd0()) == MT_OK);
+    CHECK(mt_fd_set_nonblocking(load_fd0()) == MT_OK);
+    CHECK(mt_fd_adopt(load_fd0()) == MT_OK);
+    CHECK(mt_fd_release(load_fd0()) == MT_OK);
+    CHECK(mt_fd_adopt(load_fd0()) == MT_OK);
+    assert_fd_nonblocking(load_fd0());
     CHECK(mt_fd_set_nonblocking(-1) == MT_ERR_INVALID);
     int ready = 99;
     CHECK(mt_fd_wait(-1, MT_FD_READ, 0, &ready) == MT_ERR_INVALID);
-    CHECK(mt_fd_wait(g_fd0, 0, 0, &ready) == MT_ERR_INVALID);
-    CHECK(mt_fd_wait(g_fd0, 16, 0, &ready) == MT_ERR_INVALID);
-    CHECK(mt_fd_wait(g_fd0, MT_FD_READ, 0, NULL) == MT_ERR_INVALID);
-    CHECK(mt_fd_wait(g_fd0, MT_FD_READ, 0, &ready) == MT_ERR_STATE);
+    CHECK(mt_fd_wait(load_fd0(), 0, 0, &ready) == MT_ERR_INVALID);
+    CHECK(mt_fd_wait(load_fd0(), 16, 0, &ready) == MT_ERR_INVALID);
+    CHECK(mt_fd_wait(load_fd0(), MT_FD_READ, 0, NULL) == MT_ERR_INVALID);
+    CHECK(mt_fd_wait(load_fd0(), MT_FD_READ, 0, &ready) == MT_ERR_STATE);
     CHECK(mt_fd_read(-1, &ready, 1, 0) == MT_ERR_INVALID);
-    CHECK(mt_fd_read(g_fd0, NULL, 1, 0) == MT_ERR_INVALID);
+    CHECK(mt_fd_read(load_fd0(), NULL, 1, 0) == MT_ERR_INVALID);
     CHECK(mt_fd_write(-1, &ready, 1, 0) == MT_ERR_INVALID);
-    CHECK(mt_fd_write(g_fd0, NULL, 1, 0) == MT_ERR_INVALID);
-    CHECK(mt_fd_read(g_fd0, NULL, 0, 0) == 0);
-    CHECK(mt_fd_write(g_fd0, NULL, 0, 0) == 0);
+    CHECK(mt_fd_write(load_fd0(), NULL, 1, 0) == MT_ERR_INVALID);
+    CHECK(mt_fd_read(load_fd0(), NULL, 0, 0) == 0);
+    CHECK(mt_fd_write(load_fd0(), NULL, 0, 0) == 0);
     const char c = 'a';
     CHECK(write(g_fd1, &c, 1) == 1);
     CHECK(mt_go(task_wait_read, NULL) > 0);
@@ -871,7 +886,7 @@ static void test_combined_fd_events_and_hangup(void) {
 
     reset_runtime();
     make_socketpair();
-    fill_send_buffer(g_fd0);
+    fill_send_buffer(load_fd0());
     CHECK(write(g_fd1, &c, 1) == 1);
     CHECK(mt_go(task_wait_read_write, NULL) > 0);
     CHECK(mt_runtime_start(WORKERS_1) == MT_OK);
@@ -882,7 +897,7 @@ static void test_combined_fd_events_and_hangup(void) {
 
     reset_runtime();
     make_socketpair();
-    fill_send_buffer(g_fd0);
+    fill_send_buffer(load_fd0());
     CHECK(mt_go(task_wait_read_write_timeout, NULL) > 0);
     CHECK(mt_runtime_start(WORKERS_1) == MT_OK);
     CHECK(atomic_load(&g_rc) == MT_ERR_TIMEOUT);
@@ -951,7 +966,7 @@ static void test_read_wait_wakeup_productivity_close_and_timeout(void) {
 static void test_write_wait_wakeup_and_timeout(void) {
     reset_runtime();
     make_socketpair();
-    fill_send_buffer(g_fd0);
+    fill_send_buffer(load_fd0());
     CHECK(mt_go(task_wait_write, NULL) > 0);
     CHECK(mt_go(task_drain_peer_after_sleep, NULL) > 0);
     CHECK(mt_go(task_busy_counter, NULL) > 0);
@@ -963,7 +978,7 @@ static void test_write_wait_wakeup_and_timeout(void) {
 
     reset_runtime();
     make_socketpair();
-    fill_send_buffer(g_fd0);
+    fill_send_buffer(load_fd0());
     CHECK(mt_go(task_wait_write_timeout, NULL) > 0);
     CHECK(mt_runtime_start(WORKERS_1) == MT_OK);
     CHECK(atomic_load(&g_rc) == MT_ERR_TIMEOUT);
@@ -995,7 +1010,7 @@ static void test_fd_read_write_wrappers_and_large_transfer(void) {
 
     reset_runtime();
     make_socketpair();
-    fill_send_buffer(g_fd0);
+    fill_send_buffer(load_fd0());
     CHECK(mt_go(task_write_wrapper, "hello") > 0);
     CHECK(mt_go(task_drain_peer_after_sleep, NULL) > 0);
     CHECK(mt_runtime_start(WORKERS_2) == MT_OK);
@@ -1018,7 +1033,7 @@ static void test_fd_read_write_wrappers_and_large_transfer(void) {
     CHECK(mt_runtime_start(WORKERS_2) == MT_OK);
     CHECK(atomic_load(&g_rc) == MT_ERR_TIMEOUT);
     CHECK(atomic_load(&g_counter) > 0);
-    assert_fd_nonblocking(g_fd0);
+    assert_fd_nonblocking(load_fd0());
     finish_runtime();
 
     assert_core_counters_balanced();
@@ -1056,7 +1071,7 @@ static void test_cancellation_duplicate_waiter_join_and_integration(void) {
 
     reset_runtime();
     make_socketpair();
-    fill_send_buffer(g_fd0);
+    fill_send_buffer(load_fd0());
     CHECK(mt_go(task_wait_write, NULL) > 0);
     CHECK(mt_go(task_wait_read_rc2, NULL) > 0);
     CHECK(mt_go(task_drain_and_write_peer_when_two_waiters, NULL) > 0);
@@ -1081,8 +1096,8 @@ static void test_cancellation_duplicate_waiter_join_and_integration(void) {
     mt_task_status_t status = MT_TASK_STATUS_DONE;
     CHECK(mt_task_status(g_handle, &status) == MT_OK);
     CHECK(status == MT_TASK_STATUS_WAITING_FD);
-    CHECK(mt_fd_close(g_fd0) == MT_OK);
-    g_fd0 = -1;
+    CHECK(mt_fd_close(load_fd0()) == MT_OK);
+    store_fd0(-1);
     CHECK(pthread_join(status_rt, NULL) == 0);
     CHECK(atomic_load(&g_rc) == MT_ERR_CLOSED);
     finish_runtime();
@@ -1233,7 +1248,7 @@ static void test_tcp_accept_and_net_wrappers(void) {
 static void test_fd_reuse_and_readiness_races(void) {
     reset_runtime();
     make_socketpair();
-    g_old_fd = g_fd0;
+    g_old_fd = load_fd0();
     CHECK(mt_go(task_wait_read, NULL) > 0);
     size_t workers = WORKERS_2;
     pthread_t runtime_thread;
@@ -1242,8 +1257,8 @@ static void test_fd_reuse_and_readiness_races(void) {
            mt_debug_fd_waiting_task_count() == 0) {
         sched_yield();
     }
-    CHECK(mt_fd_close(g_fd0) == MT_OK);
-    g_fd0 = -1;
+    CHECK(mt_fd_close(load_fd0()) == MT_OK);
+    store_fd0(-1);
     int reused[2] = { -1, -1 };
     for (int i = 0; i < 64 && reused[0] != g_old_fd && reused[1] != g_old_fd; ++i) {
         close_if_open(&reused[0]);
@@ -1293,9 +1308,9 @@ static void test_fd_reuse_and_readiness_races(void) {
 static void test_close_reuse_shutdown_faults_and_stress(void) {
     reset_runtime();
     make_socketpair();
-    CHECK(mt_fd_close(g_fd0) == MT_OK);
-    g_fd0 = -1;
-    CHECK(mt_fd_close(g_fd0) == MT_ERR_INVALID);
+    CHECK(mt_fd_close(load_fd0()) == MT_OK);
+    store_fd0(-1);
+    CHECK(mt_fd_close(load_fd0()) == MT_ERR_INVALID);
     finish_runtime();
 
     reset_runtime();
