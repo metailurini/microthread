@@ -1,6 +1,12 @@
 #include "microthread.h"
 
-#include <errno.h>
+#include "status_internal.h"
+
+static _Thread_local int mt_tls_last_os_error;
+
+void mt_set_last_os_error(int err) {
+    mt_tls_last_os_error = err;
+}
 
 const char *mt_strerror(int rc) {
     switch (rc) {
@@ -37,5 +43,5 @@ const char *mt_task_status_name(mt_task_status_t status) {
 }
 
 int mt_last_os_error(void) {
-    return errno;
+    return mt_tls_last_os_error;
 }

@@ -146,21 +146,7 @@ ssize_t mt_net_write(int fd, const void *buf, size_t len, uint64_t timeout_ms);
 int     mt_net_close(int fd);
 const char *mt_io_backend_name(void);
 
-/*
- * Diagnostic counters are declared by <microthread_debug.h>. Define
- * MT_ENABLE_DEBUG_API before including this header only when intentionally
- * opting into those unstable local-debugging helpers.
- */
-#ifdef MT_ENABLE_DEBUG_API
-size_t mt_debug_runnable_count(void);
-size_t mt_debug_live_task_count(void);
-size_t mt_debug_completed_task_count(void);
-size_t mt_debug_sleeping_task_count(void);
-size_t mt_debug_channel_waiting_task_count(void);
-size_t mt_debug_join_waiting_task_count(void);
-size_t mt_debug_fd_waiting_task_count(void);
-int    mt_debug_current_task_id(void);
-#endif
+/* Diagnostic counters are declared by <microthread_debug.h>. */
 
 #ifdef MT_TESTING
 void   mt_test_fail_next_task_alloc(void);

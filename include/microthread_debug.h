@@ -1,9 +1,6 @@
 #ifndef MICROTHREAD_DEBUG_H
 #define MICROTHREAD_DEBUG_H
 
-#ifndef MT_ENABLE_DEBUG_API
-#define MT_ENABLE_DEBUG_API
-#endif
 #include "microthread.h"
 
 #ifdef __cplusplus

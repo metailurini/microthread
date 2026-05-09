@@ -3,9 +3,19 @@ CFLAGS ?= -std=c11 -Wall -Wextra -Werror -O2
 CPPFLAGS ?= -Iinclude
 TEST_CPPFLAGS := $(CPPFLAGS) -DMT_TESTING
 FORCE_POLL_CPPFLAGS := $(CPPFLAGS) -DMT_FORCE_POLL_BACKEND
+SAN_CFLAGS := -std=c11 -fsanitize=address,undefined -g -O1
+TSAN_CFLAGS := -std=c11 -fsanitize=thread -g -O1
 
 SRC := src/microthread.c src/status.c
 ASM_SRC :=
+INTERNAL_SRC := \
+	src/io.c \
+	src/io_backend.c \
+	src/io_backend.h \
+	src/io_backend_poll.c \
+	src/io_backend_epoll.c \
+	src/io_backend_kqueue.c \
+	src/status_internal.h
 
 ifeq ($(OS),Windows_NT)
 SRC += src/context_win_fiber.c
@@ -25,10 +35,14 @@ endif
 
 LDLIBS += $(THREAD_FLAGS)
 CFLAGS += $(THREAD_FLAGS)
+SAN_CFLAGS += $(THREAD_FLAGS)
+TSAN_CFLAGS += $(THREAD_FLAGS)
 
 BUILD_DIR := build
 LIB := $(BUILD_DIR)/libmicrothread.a
 OBJ := $(SRC:%.c=$(BUILD_DIR)/%.o) $(ASM_SRC:%.S=$(BUILD_DIR)/%.o)
+DIRECT_DEPS := $(SRC) $(ASM_SRC) $(INTERNAL_SRC)
+
 POLL_OBJ := $(BUILD_DIR)/src/microthread_poll.o $(BUILD_DIR)/src/status_poll.o
 ifeq ($(UNAME_S),Darwin)
 POLL_OBJ += $(BUILD_DIR)/src/context_asm_poll.o $(BUILD_DIR)/src/context_asm_macos_poll.o
@@ -36,11 +50,25 @@ else ifneq ($(OS),Windows_NT)
 POLL_OBJ += $(BUILD_DIR)/src/context_ucontext_poll.o
 endif
 
+FAST_TESTS := test_v0_1 test_v0_2 test_v0_3 test_v0_4 test_v0_5 test_v0_6 test_v0_7 test_v0_7_poll test_public_api test_public_io test_guard_disabled
+STRESS_TESTS := test_v0_1_full test_v0_2_full test_v0_3_full test_v0_4_full
+IO_STRESS_TESTS := test_v0_7_full test_v0_7_poll_full
+SAN_TESTS := test_v0_1_asan test_v0_2_asan test_v0_3_asan test_v0_4_asan test_v0_5_asan test_v0_6_asan test_v0_7_asan test_v0_7_poll_asan
+VALGRIND_TESTS := test_v0_1 test_v0_2 test_v0_3 test_v0_4 test_v0_5 test_v0_6 test_v0_7 test_v0_7_poll
+EXAMPLES := basic sleep channels handles select try_nonblocking select_advanced
+
+FAST_BINS := $(foreach t,$(FAST_TESTS),$(BUILD_DIR)/$(t)$(EXE))
+STRESS_BINS := $(foreach t,$(STRESS_TESTS),$(BUILD_DIR)/$(t)$(EXE))
+IO_STRESS_BINS := $(foreach t,$(IO_STRESS_TESTS),$(BUILD_DIR)/$(t)$(EXE))
+SAN_BINS := $(foreach t,$(SAN_TESTS),$(BUILD_DIR)/$(t)$(EXE))
+VALGRIND_BINS := $(foreach t,$(VALGRIND_TESTS),$(BUILD_DIR)/$(t)$(EXE))
+EXAMPLE_BINS := $(foreach e,$(EXAMPLES),$(BUILD_DIR)/$(e)$(EXE))
+
 .PHONY: all test stress io-stress sanitize tsan io-tsan valgrind guard-test guard-disabled-test force-poll-build example examples sleep-example channels-example handles-example select-example try-example select-advanced-example echo-server-example clean
 
 all: $(LIB)
 
-$(BUILD_DIR)/%.o: %.c
+$(BUILD_DIR)/%.o: %.c $(INTERNAL_SRC)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
@@ -52,110 +80,70 @@ $(LIB): $(OBJ)
 	@mkdir -p $(dir $@)
 	ar rcs $@ $^
 
-$(BUILD_DIR)/test_v0_1$(EXE): tests/test_v0_1.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+define DIRECT_TEST
+$(BUILD_DIR)/$(1)$(EXE): tests/$(2).c $(DIRECT_DEPS)
+	@mkdir -p $$(dir $$@)
+	$$(CC) $$(TEST_CPPFLAGS) $(3) $$(CFLAGS) $$(SRC) $$(ASM_SRC) $$< $$(LDLIBS) -o $$@
+endef
 
-$(BUILD_DIR)/test_v0_1_full$(EXE): tests/test_v0_1.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DMT_FULL_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+define DIRECT_SAN_TEST
+$(BUILD_DIR)/$(1)$(EXE): tests/$(2).c $(DIRECT_DEPS)
+	@mkdir -p $$(dir $$@)
+	$$(CC) $$(TEST_CPPFLAGS) $(3) $$(SAN_CFLAGS) $$(SRC) $$(ASM_SRC) $$< $$(LDLIBS) -o $$@
+endef
 
-$(BUILD_DIR)/test_v0_1_asan$(EXE): tests/test_v0_1.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+define DIRECT_TSAN_TEST
+$(BUILD_DIR)/$(1)$(EXE): tests/$(2).c $(DIRECT_DEPS)
+	@mkdir -p $$(dir $$@)
+	$$(CC) $$(TEST_CPPFLAGS) $(3) $$(TSAN_CFLAGS) $$(SRC) $$(ASM_SRC) $$< $$(LDLIBS) -o $$@
+endef
 
-$(BUILD_DIR)/test_v0_2$(EXE): tests/test_v0_2.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+define PUBLIC_TEST
+$(BUILD_DIR)/$(1)$(EXE): tests/$(2).c $(LIB)
+	@mkdir -p $$(dir $$@)
+	$$(CC) $$(CPPFLAGS) $$(CFLAGS) $$< $$(LIB) $$(LDLIBS) -o $$@
+endef
 
-$(BUILD_DIR)/test_v0_2_full$(EXE): tests/test_v0_2.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DMT_FULL_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+define EXAMPLE_TEMPLATE
+$(BUILD_DIR)/$(1)$(EXE): examples/$(1).c $(LIB)
+	@mkdir -p $$(dir $$@)
+	$$(CC) $$(CPPFLAGS) $$(CFLAGS) $$< $$(LIB) $$(LDLIBS) -o $$@
+endef
 
-$(BUILD_DIR)/test_v0_2_asan$(EXE): tests/test_v0_2.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+$(eval $(call DIRECT_TEST,test_v0_1,test_v0_1,))
+$(eval $(call DIRECT_TEST,test_v0_1_full,test_v0_1,-DMT_FULL_STRESS))
+$(eval $(call DIRECT_SAN_TEST,test_v0_1_asan,test_v0_1,))
+$(eval $(call DIRECT_TEST,test_v0_2,test_v0_2,))
+$(eval $(call DIRECT_TEST,test_v0_2_full,test_v0_2,-DMT_FULL_STRESS))
+$(eval $(call DIRECT_SAN_TEST,test_v0_2_asan,test_v0_2,))
+$(eval $(call DIRECT_TEST,test_v0_3,test_v0_3,))
+$(eval $(call DIRECT_TEST,test_v0_3_full,test_v0_3,-DMT_FULL_STRESS))
+$(eval $(call DIRECT_SAN_TEST,test_v0_3_asan,test_v0_3,))
+$(eval $(call DIRECT_TEST,test_v0_4,test_v0_4,))
+$(eval $(call DIRECT_TEST,test_v0_4_full,test_v0_4,-DMT_FULL_STRESS))
+$(eval $(call DIRECT_SAN_TEST,test_v0_4_asan,test_v0_4,))
+$(eval $(call DIRECT_TEST,test_v0_5,test_v0_5,))
+$(eval $(call DIRECT_SAN_TEST,test_v0_5_asan,test_v0_5,))
+$(eval $(call DIRECT_TEST,test_v0_6,test_v0_6,))
+$(eval $(call DIRECT_SAN_TEST,test_v0_6_asan,test_v0_6,))
+$(eval $(call DIRECT_TSAN_TEST,test_v0_6_tsan,test_v0_6,))
+$(eval $(call DIRECT_TEST,test_v0_7,test_v0_7,))
+$(eval $(call DIRECT_TEST,test_v0_7_poll,test_v0_7,-DMT_FORCE_POLL_BACKEND))
+$(eval $(call DIRECT_TEST,test_v0_7_full,test_v0_7,-DMT_IO_STRESS))
+$(eval $(call DIRECT_TEST,test_v0_7_poll_full,test_v0_7,-DMT_FORCE_POLL_BACKEND -DMT_IO_STRESS))
+$(eval $(call DIRECT_SAN_TEST,test_v0_7_asan,test_v0_7,))
+$(eval $(call DIRECT_SAN_TEST,test_v0_7_poll_asan,test_v0_7,-DMT_FORCE_POLL_BACKEND))
+$(eval $(call DIRECT_TSAN_TEST,test_v0_7_tsan,test_v0_7,))
+$(eval $(call DIRECT_TSAN_TEST,test_v0_7_poll_tsan,test_v0_7,-DMT_FORCE_POLL_BACKEND))
+$(eval $(call DIRECT_TEST,test_guard_overflow,test_guard_overflow,))
+$(eval $(call DIRECT_TEST,test_guard_disabled,test_guard_disabled,-DMT_DISABLE_GUARD_PAGES))
+$(eval $(call DIRECT_TEST,test_v0_4_guard_disabled,test_v0_4,-DMT_DISABLE_GUARD_PAGES))
+$(eval $(call PUBLIC_TEST,test_public_api,test_public_api))
+$(eval $(call PUBLIC_TEST,test_public_io,test_public_io))
+$(foreach e,$(EXAMPLES),$(eval $(call EXAMPLE_TEMPLATE,$(e))))
+$(eval $(call EXAMPLE_TEMPLATE,echo_server))
 
-$(BUILD_DIR)/test_v0_3$(EXE): tests/test_v0_3.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_3_full$(EXE): tests/test_v0_3.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DMT_FULL_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_3_asan$(EXE): tests/test_v0_3.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_4$(EXE): tests/test_v0_4.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_4_full$(EXE): tests/test_v0_4.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DMT_FULL_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_4_asan$(EXE): tests/test_v0_4.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_5$(EXE): tests/test_v0_5.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_5_asan$(EXE): tests/test_v0_5.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_6$(EXE): tests/test_v0_6.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_6_asan$(EXE): tests/test_v0_6.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_6_tsan$(EXE): tests/test_v0_6.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -fsanitize=thread -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_7$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_7_poll$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DMT_FORCE_POLL_BACKEND $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_7_full$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DMT_IO_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_7_poll_full$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DMT_FORCE_POLL_BACKEND -DMT_IO_STRESS $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_7_asan$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_7_poll_asan$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DMT_FORCE_POLL_BACKEND -fsanitize=address,undefined -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_7_tsan$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -fsanitize=thread -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-
-$(BUILD_DIR)/test_v0_7_poll_tsan$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DMT_FORCE_POLL_BACKEND -fsanitize=thread -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
-$(BUILD_DIR)/test_public_api$(EXE): tests/test_public_api.c $(LIB)
-	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
-
-$(BUILD_DIR)/libmicrothread_poll.a: $(SRC) $(ASM_SRC)
+$(BUILD_DIR)/libmicrothread_poll.a: $(DIRECT_DEPS)
 	@mkdir -p $(dir $@) $(BUILD_DIR)/src
 	$(CC) $(FORCE_POLL_CPPFLAGS) $(CFLAGS) -c src/microthread.c -o $(BUILD_DIR)/src/microthread_poll.o
 	$(CC) $(FORCE_POLL_CPPFLAGS) $(CFLAGS) -c src/status.c -o $(BUILD_DIR)/src/status_poll.o
@@ -170,81 +158,17 @@ $(BUILD_DIR)/libmicrothread_poll.a: $(SRC) $(ASM_SRC)
 	fi
 	ar rcs $@ $(POLL_OBJ)
 
-$(BUILD_DIR)/test_guard_overflow$(EXE): tests/test_guard_overflow.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+test: $(FAST_BINS)
+	@for t in $(FAST_TESTS); do $(BUILD_DIR)/$$t$(EXE) || exit 1; done
 
-$(BUILD_DIR)/test_guard_disabled$(EXE): tests/test_guard_disabled.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DMT_DISABLE_GUARD_PAGES $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+stress: $(STRESS_BINS)
+	@for t in $(STRESS_TESTS); do $(BUILD_DIR)/$$t$(EXE) || exit 1; done
 
-$(BUILD_DIR)/test_v0_4_guard_disabled$(EXE): tests/test_v0_4.c $(SRC) $(ASM_SRC)
-	@mkdir -p $(dir $@)
-	$(CC) $(TEST_CPPFLAGS) -DMT_DISABLE_GUARD_PAGES $(CFLAGS) $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+io-stress: $(IO_STRESS_BINS)
+	@for t in $(IO_STRESS_TESTS); do $(BUILD_DIR)/$$t$(EXE) || exit 1; done
 
-$(BUILD_DIR)/basic$(EXE): examples/basic.c $(LIB)
-	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
-
-$(BUILD_DIR)/sleep$(EXE): examples/sleep.c $(LIB)
-	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
-
-$(BUILD_DIR)/channels$(EXE): examples/channels.c $(LIB)
-	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
-
-$(BUILD_DIR)/handles$(EXE): examples/handles.c $(LIB)
-	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
-
-$(BUILD_DIR)/select$(EXE): examples/select.c $(LIB)
-	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
-
-$(BUILD_DIR)/try_nonblocking$(EXE): examples/try_nonblocking.c $(LIB)
-	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
-
-$(BUILD_DIR)/select_advanced$(EXE): examples/select_advanced.c $(LIB)
-	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
-
-$(BUILD_DIR)/echo_server$(EXE): examples/echo_server.c $(LIB)
-	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
-
-test: $(BUILD_DIR)/test_v0_1$(EXE) $(BUILD_DIR)/test_v0_2$(EXE) $(BUILD_DIR)/test_v0_3$(EXE) $(BUILD_DIR)/test_v0_4$(EXE) $(BUILD_DIR)/test_v0_5$(EXE) $(BUILD_DIR)/test_v0_6$(EXE) $(BUILD_DIR)/test_v0_7$(EXE) $(BUILD_DIR)/test_v0_7_poll$(EXE) $(BUILD_DIR)/test_public_api$(EXE) $(BUILD_DIR)/test_guard_disabled$(EXE)
-	$(BUILD_DIR)/test_v0_1$(EXE)
-	$(BUILD_DIR)/test_v0_2$(EXE)
-	$(BUILD_DIR)/test_v0_3$(EXE)
-	$(BUILD_DIR)/test_v0_4$(EXE)
-	$(BUILD_DIR)/test_v0_5$(EXE)
-	$(BUILD_DIR)/test_v0_6$(EXE)
-	$(BUILD_DIR)/test_v0_7$(EXE)
-	$(BUILD_DIR)/test_v0_7_poll$(EXE)
-	$(BUILD_DIR)/test_public_api$(EXE)
-	$(BUILD_DIR)/test_guard_disabled$(EXE)
-
-stress: $(BUILD_DIR)/test_v0_1_full$(EXE) $(BUILD_DIR)/test_v0_2_full$(EXE) $(BUILD_DIR)/test_v0_3_full$(EXE) $(BUILD_DIR)/test_v0_4_full$(EXE)
-	$(BUILD_DIR)/test_v0_1_full$(EXE)
-	$(BUILD_DIR)/test_v0_2_full$(EXE)
-	$(BUILD_DIR)/test_v0_3_full$(EXE)
-	$(BUILD_DIR)/test_v0_4_full$(EXE)
-
-io-stress: $(BUILD_DIR)/test_v0_7_full$(EXE) $(BUILD_DIR)/test_v0_7_poll_full$(EXE)
-	$(BUILD_DIR)/test_v0_7_full$(EXE)
-	$(BUILD_DIR)/test_v0_7_poll_full$(EXE)
-
-sanitize: $(BUILD_DIR)/test_v0_1_asan$(EXE) $(BUILD_DIR)/test_v0_2_asan$(EXE) $(BUILD_DIR)/test_v0_3_asan$(EXE) $(BUILD_DIR)/test_v0_4_asan$(EXE) $(BUILD_DIR)/test_v0_5_asan$(EXE) $(BUILD_DIR)/test_v0_6_asan$(EXE) $(BUILD_DIR)/test_v0_7_asan$(EXE) $(BUILD_DIR)/test_v0_7_poll_asan$(EXE)
-	$(BUILD_DIR)/test_v0_1_asan$(EXE)
-	$(BUILD_DIR)/test_v0_2_asan$(EXE)
-	$(BUILD_DIR)/test_v0_3_asan$(EXE)
-	$(BUILD_DIR)/test_v0_4_asan$(EXE)
-	$(BUILD_DIR)/test_v0_5_asan$(EXE)
-	$(BUILD_DIR)/test_v0_6_asan$(EXE)
-	$(BUILD_DIR)/test_v0_7_asan$(EXE)
-	$(BUILD_DIR)/test_v0_7_poll_asan$(EXE)
+sanitize: $(SAN_BINS)
+	@for t in $(SAN_TESTS); do $(BUILD_DIR)/$$t$(EXE) || exit 1; done
 
 tsan: $(BUILD_DIR)/test_v0_6_tsan$(EXE)
 	$(BUILD_DIR)/test_v0_6_tsan$(EXE)
@@ -257,16 +181,11 @@ io-tsan:
 	@echo "v0.7 ThreadSanitizer runtime is skipped with the ucontext backend; run on Darwin asm backend or use ASan via make sanitize"
 endif
 
-valgrind: $(BUILD_DIR)/test_v0_1$(EXE) $(BUILD_DIR)/test_v0_2$(EXE) $(BUILD_DIR)/test_v0_3$(EXE) $(BUILD_DIR)/test_v0_4$(EXE) $(BUILD_DIR)/test_v0_5$(EXE) $(BUILD_DIR)/test_v0_6$(EXE) $(BUILD_DIR)/test_v0_7$(EXE) $(BUILD_DIR)/test_v0_7_poll$(EXE)
+valgrind: $(VALGRIND_BINS)
 	@if command -v valgrind >/dev/null 2>&1; then \
-		valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 $(BUILD_DIR)/test_v0_1$(EXE); \
-		valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 $(BUILD_DIR)/test_v0_2$(EXE); \
-		valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 $(BUILD_DIR)/test_v0_3$(EXE); \
-		valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 $(BUILD_DIR)/test_v0_4$(EXE); \
-		valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 $(BUILD_DIR)/test_v0_5$(EXE); \
-		valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 $(BUILD_DIR)/test_v0_6$(EXE); \
-		valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 $(BUILD_DIR)/test_v0_7$(EXE); \
-		valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 $(BUILD_DIR)/test_v0_7_poll$(EXE); \
+		for t in $(VALGRIND_TESTS); do \
+			valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 $(BUILD_DIR)/$$t$(EXE) || exit 1; \
+		done; \
 	else \
 		echo "valgrind not found; skipping valgrind target"; \
 	fi
@@ -275,7 +194,7 @@ guard-test: $(BUILD_DIR)/test_guard_overflow$(EXE)
 	$<
 
 guard-disabled-test: $(BUILD_DIR)/test_guard_disabled$(EXE) $(BUILD_DIR)/test_v0_4_guard_disabled$(EXE)
-	$<
+	$(BUILD_DIR)/test_guard_disabled$(EXE)
 	$(BUILD_DIR)/test_v0_4_guard_disabled$(EXE)
 
 force-poll-build: $(BUILD_DIR)/libmicrothread_poll.a
@@ -283,14 +202,8 @@ force-poll-build: $(BUILD_DIR)/libmicrothread_poll.a
 example: $(BUILD_DIR)/basic$(EXE)
 	$<
 
-examples: $(BUILD_DIR)/basic$(EXE) $(BUILD_DIR)/sleep$(EXE) $(BUILD_DIR)/channels$(EXE) $(BUILD_DIR)/handles$(EXE) $(BUILD_DIR)/select$(EXE) $(BUILD_DIR)/try_nonblocking$(EXE) $(BUILD_DIR)/select_advanced$(EXE)
-	$(BUILD_DIR)/basic$(EXE)
-	$(BUILD_DIR)/sleep$(EXE)
-	$(BUILD_DIR)/channels$(EXE)
-	$(BUILD_DIR)/handles$(EXE)
-	$(BUILD_DIR)/select$(EXE)
-	$(BUILD_DIR)/try_nonblocking$(EXE)
-	$(BUILD_DIR)/select_advanced$(EXE)
+examples: $(EXAMPLE_BINS)
+	@for e in $(EXAMPLES); do $(BUILD_DIR)/$$e$(EXE) || exit 1; done
 
 sleep-example: $(BUILD_DIR)/sleep$(EXE)
 	$<

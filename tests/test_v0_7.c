@@ -778,7 +778,7 @@ static void test_backend_lifecycle_and_reporting(void) {
     reset_runtime();
     mt_test_fail_next_io_backend_init();
     mt_shutdown();
-    CHECK(mt_init() == MT_ERR);
+    CHECK(mt_init() == MT_ERR_BACKEND);
     CHECK(mt_init() == MT_OK);
     finish_runtime();
     assert_io_counters_balanced();
@@ -1169,7 +1169,7 @@ static void test_tcp_accept_and_net_wrappers(void) {
     char port_buf[32];
     snprintf(port_buf, sizeof(port_buf), "%d", atomic_load(&g_listener_port));
     int conflict_fd = mt_net_listen_tcp("127.0.0.1", port_buf, 64);
-    CHECK(conflict_fd == MT_ERR);
+    CHECK(conflict_fd == MT_ERR_IO);
     CHECK(count_open_fds() == open_before_conflict);
     assert_fd_nonblocking(g_listen_fd);
     finish_runtime();
@@ -1191,7 +1191,7 @@ static void test_tcp_accept_and_net_wrappers(void) {
     g_fd1 = -1;
     CHECK(mt_go(task_net_write_wrapper, "x") > 0);
     CHECK(mt_runtime_start(WORKERS_1) == MT_OK);
-    CHECK(atomic_load(&g_rc) == MT_ERR);
+    CHECK(atomic_load(&g_rc) == MT_ERR_IO);
     finish_runtime();
 
     assert_core_counters_balanced();
@@ -1312,7 +1312,7 @@ static void test_close_reuse_shutdown_faults_and_stress(void) {
     mt_test_fail_next_io_backend_register();
     CHECK(mt_go(task_wait_read, NULL) > 0);
     CHECK(mt_runtime_start(WORKERS_1) == MT_OK);
-    CHECK(atomic_load(&g_rc) == MT_ERR);
+    CHECK(atomic_load(&g_rc) == MT_ERR_BACKEND);
     finish_runtime();
 
     reset_runtime();

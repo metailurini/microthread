@@ -83,7 +83,9 @@ For `mt_fd_read()` / `mt_fd_write()`:
 
 - positive return values are byte counts
 - `0` from read means EOF when the peer closed cleanly
-- `-1` should preserve or document errno behavior
+- negative returns are MicroThread status values; `mt_last_os_error()` should
+  expose the thread-local OS/backend error captured by the failing MicroThread
+  path when that failure came from the operating system/backend
 - timeout/cancel/closed statuses must be distinguishable from normal EOF
 
 ## 0. Test Harness Requirements
@@ -394,12 +396,13 @@ For `mt_fd_read()` / `mt_fd_write()`:
 ## 14. Fault Injection and Cleanup
 
 - **TC-IO-ERR-001**: backend allocation failure during init cleans up and returns
-  error.
+  `MT_ERR_BACKEND`.
 - **TC-IO-ERR-002**: waiter allocation failure leaves the task runnable or returns
   a documented error without leaking.
 - **TC-IO-ERR-003**: timer allocation failure during fd wait with timeout cleans
   up fd interest.
-- **TC-IO-ERR-004**: backend registration failure cleans up waiter state.
+- **TC-IO-ERR-004**: backend registration failure cleans up waiter state and
+  returns `MT_ERR_BACKEND`.
 - **TC-IO-ERR-005**: backend deregistration failure is handled or documented.
 - **TC-IO-ERR-006**: socketpair/listener helper failure paths close all fds.
 - **TC-IO-ERR-007**: partial write followed by error returns documented partial or

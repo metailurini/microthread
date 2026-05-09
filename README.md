@@ -379,7 +379,7 @@ Current implementation notes:
 - Backend resources are initialized once with the runtime and cleaned up by `mt_shutdown()`.
 - `timeout_ms == 0` means a nonblocking readiness poll. The fd APIs use finite millisecond timeouts; pass a very large value when a practical indefinite wait is desired.
 - `MT_ERR_TIMEOUT`, `MT_ERR_CANCELLED`, `MT_ERR_CLOSED`, and `MT_ERR_INVALID` are distinct statuses.
-- `mt_strerror(rc)` returns a short static string for MicroThread status/error codes. `mt_last_os_error()` exposes the current thread's `errno` value for OS-level diagnostics after I/O failures.
+- `mt_strerror(rc)` returns a short static string for MicroThread status/error codes. `mt_last_os_error()` returns the thread-local OS/backend error captured by the last MicroThread failure path, so it is not overwritten by unrelated library calls after the failure is recorded.
 - `mt_task_status_name(status)` returns a short static name for task status values.
 - `mt_fd_read()`, `mt_fd_write()`, and `mt_net_accept()` put their descriptor into nonblocking mode before attempting OS I/O, so accidentally passing a blocking descriptor does not park an OS worker forever.
 - `mt_fd_adopt(fd)` makes descriptor ownership explicit: it puts the fd in nonblocking mode and registers descriptor-generation metadata for MicroThread readiness tracking. `mt_fd_release(fd)` drops that metadata without closing the fd; it fails while an active waiter exists. Release does not restore the fd's previous blocking flags.
@@ -423,6 +423,16 @@ Cancellation is cooperative. `mt_task_cancel()` requests cancellation and wakes 
 ## Platform notes
 
 Context switching is isolated behind `src/context.h`.
+
+The core runtime is still compiled as a small number of translation units, but
+the I/O subsystem is separated internally:
+
+- `src/io.c` implements the public `mt_fd_*` and `mt_net_*` APIs.
+- `src/io_backend.h` declares private backend helpers.
+- `src/io_backend_poll.c`, `src/io_backend_epoll.c`, and
+  `src/io_backend_kqueue.c` contain backend-specific readiness code.
+- These I/O files are included by `src/microthread.c` so they can share the
+  private scheduler/runtime structs without exposing them in public headers.
 
 Current backends:
 
