@@ -7,9 +7,9 @@
  * runtime.
  */
 
-#include "microthread.h"
-
 #ifdef MICROTHREAD_EMBEDDED_IMPL
+
+#include "status_internal.h"
 
 #if !defined(_WIN32)
 static int mt_fd_validate_events(int events) {

@@ -8,7 +8,6 @@
 #include "microthread.h"
 
 #include "context.h"
-#include "status_internal.h"
 
 #include <errno.h>
 #include <limits.h>

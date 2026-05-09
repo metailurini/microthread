@@ -6,10 +6,9 @@
  * compiled when embedded by the runtime.
  */
 
-#include "microthread.h"
-#include "io_backend.h"
-
 #ifdef MICROTHREAD_EMBEDDED_IMPL
+
+#include "status_internal.h"
 
 #if !defined(_WIN32)
 #define MT_IO_WAKE_SENTINEL (-1)
