@@ -211,6 +211,7 @@ typedef struct mt_chan mt_chan_t;
 typedef struct mt_task_handle mt_task_handle_t;
 
 int  mt_init(void);
+int  mt_init_with_options(const mt_options_t *options);
 int  mt_go(mt_fn fn, void *arg);
 int  mt_go_with_stack(mt_fn fn, void *arg, size_t stack_size);
 mt_task_handle_t *mt_go_handle(mt_fn fn, void *arg);
@@ -222,6 +223,7 @@ int  mt_run_workers(size_t worker_count);
 void mt_yield(void);
 void mt_sleep_ms(uint64_t ms);
 void mt_shutdown(void);
+const char *mt_strerror(int rc);
 
 int  mt_join(mt_task_handle_t *task);
 int  mt_task_cancel(mt_task_handle_t *task);
@@ -347,6 +349,8 @@ Core APIs:
 
 ```c
 mt_fd_set_nonblocking(fd);
+mt_fd_adopt(fd);
+mt_fd_release(fd);
 mt_fd_wait_read(fd, timeout_ms);
 mt_fd_wait_write(fd, timeout_ms);
 mt_fd_wait(fd, MT_FD_READ | MT_FD_WRITE, timeout_ms, &ready_events);
@@ -373,11 +377,17 @@ Current implementation notes:
 - Backend resources are initialized once with the runtime and cleaned up by `mt_shutdown()`.
 - `timeout_ms == 0` means a nonblocking readiness poll. The fd APIs use finite millisecond timeouts; pass a very large value when a practical indefinite wait is desired.
 - `MT_ERR_TIMEOUT`, `MT_ERR_CANCELLED`, `MT_ERR_CLOSED`, and `MT_ERR_INVALID` are distinct statuses.
+- `mt_strerror(rc)` returns a short static string for MicroThread status/error codes.
 - `mt_fd_read()`, `mt_fd_write()`, and `mt_net_accept()` put their descriptor into nonblocking mode before attempting OS I/O, so accidentally passing a blocking descriptor does not park an OS worker forever.
+- `mt_fd_adopt(fd)` makes descriptor ownership explicit: it puts the fd in nonblocking mode and registers descriptor-generation metadata for MicroThread readiness tracking. `mt_fd_release(fd)` drops that metadata without closing the fd; it fails while an active waiter exists.
 - `mt_fd_close(fd)` closes the descriptor and wakes MicroThread waiters for that fd.
 - `mt_net_write()` avoids `SIGPIPE` where the platform provides `MSG_NOSIGNAL` or `SO_NOSIGPIPE`; `mt_fd_write()` is the lower-level descriptor helper and may inherit normal platform `write()` behavior.
+- `mt_fd_write()` may return a positive partial byte count if some bytes were written before a later timeout/error. Caller code that requires an exact byte count should loop until the full buffer is written or a negative status is returned.
 - A single active waiter per descriptor is supported; overlapping waits on the same fd return `MT_ERR_STATE`, including immediate-readiness fast paths.
 - Descriptor reuse is guarded for descriptors closed through `mt_fd_close(fd)`. Raw `close(fd)` while a microthread is waiting on the same fd is unsupported; use `mt_fd_close(fd)`.
+- `mt_net_listen_tcp()` uses `getaddrinfo()` during setup. Use numeric bind addresses or call it during startup when avoiding blocking DNS/service resolution matters.
+
+Diagnostics such as `mt_debug_runnable_count()` are intended for tests and local debugging. Include `<microthread_debug.h>` when using them directly, and do not treat the returned counts as synchronization primitives.
 
 This is enough to build echo-server-style examples. Full HTTP parsing, routing, request limits, and production server behavior are intentionally separate future layers.
 
@@ -415,7 +425,7 @@ Current backends:
 
 - macOS x86_64/aarch64: assembly backend.
 - non-macOS Unix-like platforms: `ucontext` backend.
-- Windows: Fiber backend.
+- Windows: Fiber context backend is present, but v0.7 descriptor/socket readiness APIs are not implemented yet and return unsupported-state errors. Unix-like platforms are the primary target for fd/socket I/O today.
 
 For platforms or embedders that cannot use guard pages, build with:
 

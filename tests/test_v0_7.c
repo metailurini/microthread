@@ -502,6 +502,16 @@ static void task_close_race_waiter(void *arg) {
     atomic_store(&g_rc2, rc);
 }
 
+static void task_release_active_waiter(void *arg) {
+    (void)arg;
+    while (mt_debug_fd_waiting_task_count() == 0) {
+        mt_yield();
+    }
+    atomic_store(&g_rc2, mt_fd_release(g_fd0));
+    CHECK(mt_fd_close(g_fd0) == MT_OK);
+    g_fd0 = -1;
+}
+
 static void task_wait_read_then_joinable(void *arg) {
     (void)arg;
     char c = 0;
@@ -778,6 +788,9 @@ static void test_nonblocking_validation_and_immediate_ready(void) {
     make_socketpair();
     CHECK(mt_fd_set_nonblocking(g_fd0) == MT_OK);
     CHECK(mt_fd_set_nonblocking(g_fd0) == MT_OK);
+    CHECK(mt_fd_adopt(g_fd0) == MT_OK);
+    CHECK(mt_fd_release(g_fd0) == MT_OK);
+    CHECK(mt_fd_adopt(g_fd0) == MT_OK);
     assert_fd_nonblocking(g_fd0);
     CHECK(mt_fd_set_nonblocking(-1) == MT_ERR_INVALID);
     int ready = 99;
@@ -799,6 +812,16 @@ static void test_nonblocking_validation_and_immediate_ready(void) {
     CHECK(atomic_load(&g_rc) == MT_OK);
     CHECK((atomic_load(&g_ready) & MT_FD_READ) != 0);
     finish_runtime();
+
+    reset_runtime();
+    make_socketpair();
+    CHECK(mt_go(task_wait_read, NULL) > 0);
+    CHECK(mt_go(task_release_active_waiter, NULL) > 0);
+    CHECK(mt_runtime_start(WORKERS_1) == MT_OK);
+    CHECK(atomic_load(&g_rc) == MT_ERR_CLOSED);
+    CHECK(atomic_load(&g_rc2) == MT_ERR_STATE);
+    finish_runtime();
+
     assert_core_counters_balanced();
     assert_io_counters_balanced();
 }

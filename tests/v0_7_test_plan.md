@@ -33,6 +33,8 @@ Exact names may still change, but the test plan assumes an API in this shape:
 
 ```c
 int mt_fd_set_nonblocking(int fd);
+int mt_fd_adopt(int fd);
+int mt_fd_release(int fd);
 int mt_fd_wait_read(int fd, uint64_t timeout_ms);
 int mt_fd_wait_write(int fd, uint64_t timeout_ms);
 int mt_fd_wait(int fd, int events, uint64_t timeout_ms, int *ready_events);
@@ -144,6 +146,10 @@ For `mt_fd_read()` / `mt_fd_write()`:
 - **TC-FD-NONBLOCK-002**: calling `mt_fd_set_nonblocking(fd)` twice is harmless.
 - **TC-FD-NONBLOCK-003**: invalid fd returns `MT_ERR_INVALID` or an errno-backed
   documented error.
+- **TC-FD-NONBLOCK-003A**: `mt_fd_adopt(fd)` makes a descriptor nonblocking and
+  prepares descriptor-generation metadata for MicroThread I/O.
+- **TC-FD-NONBLOCK-003B**: `mt_fd_release(fd)` removes MicroThread descriptor
+  metadata without closing the descriptor and rejects release while a waiter is active.
 - **TC-FD-NONBLOCK-004**: fd wait APIs reject negative descriptors.
 - **TC-FD-NONBLOCK-005**: fd wait APIs reject unsupported event masks.
 - **TC-FD-NONBLOCK-006**: fd wait APIs validate null output pointers where output

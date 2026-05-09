@@ -1,12 +1,13 @@
-#ifndef MT_H
-#define MT_H
+#ifndef MICROTHREAD_H
+#define MICROTHREAD_H
 
 #include <stddef.h>
 #include <stdint.h>
 
 #if defined(_WIN32)
 #ifndef _SSIZE_T_DEFINED
-typedef long ssize_t;
+#include <stdint.h>
+typedef intptr_t ssize_t;
 #endif
 struct sockaddr;
 typedef int socklen_t;
@@ -80,6 +81,7 @@ enum {
 };
 
 int  mt_init(void);
+int  mt_init_with_options(const mt_options_t *options);
 int  mt_go(mt_fn fn, void *arg);
 int  mt_go_with_stack(mt_fn fn, void *arg, size_t stack_size);
 mt_task_handle_t *mt_go_handle(mt_fn fn, void *arg);
@@ -91,6 +93,7 @@ int  mt_run_workers(size_t worker_count);
 void mt_yield(void);
 void mt_sleep_ms(uint64_t ms);
 void mt_shutdown(void);
+const char *mt_strerror(int rc);
 
 int  mt_join(mt_task_handle_t *task);
 int  mt_task_cancel(mt_task_handle_t *task);
@@ -112,6 +115,8 @@ int        mt_chan_is_closed(const mt_chan_t *ch);
 int        mt_select(mt_select_case_t *cases, size_t count, size_t *selected_index);
 
 int     mt_fd_set_nonblocking(int fd);
+int     mt_fd_adopt(int fd);
+int     mt_fd_release(int fd);
 int     mt_fd_wait_read(int fd, uint64_t timeout_ms);
 int     mt_fd_wait_write(int fd, uint64_t timeout_ms);
 int     mt_fd_wait(int fd, int events, uint64_t timeout_ms, int *ready_events);
@@ -135,6 +140,12 @@ ssize_t mt_net_write(int fd, const void *buf, size_t len, uint64_t timeout_ms);
 int     mt_net_close(int fd);
 const char *mt_io_backend_name(void);
 
+/*
+ * Lightweight diagnostics. These are stable enough for tests and local
+ * debugging, but should not be used as synchronization primitives. Projects
+ * that want to keep public API includes smaller can include
+ * <microthread_debug.h> for the same declarations.
+ */
 size_t mt_debug_runnable_count(void);
 size_t mt_debug_live_task_count(void);
 size_t mt_debug_completed_task_count(void);
@@ -189,4 +200,4 @@ void   mt_test_io_memory_counters(size_t *fd_waiter_allocs,
 }
 #endif
 
-#endif /* MT_H */
+#endif /* MICROTHREAD_H */

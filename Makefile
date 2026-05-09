@@ -29,6 +29,12 @@ CFLAGS += $(THREAD_FLAGS)
 BUILD_DIR := build
 LIB := $(BUILD_DIR)/libmicrothread.a
 OBJ := $(SRC:%.c=$(BUILD_DIR)/%.o) $(ASM_SRC:%.S=$(BUILD_DIR)/%.o)
+POLL_OBJ := $(BUILD_DIR)/src/microthread_poll.o
+ifeq ($(UNAME_S),Darwin)
+POLL_OBJ += $(BUILD_DIR)/src/context_asm_poll.o $(BUILD_DIR)/src/context_asm_macos_poll.o
+else ifneq ($(OS),Windows_NT)
+POLL_OBJ += $(BUILD_DIR)/src/context_ucontext_poll.o
+endif
 
 .PHONY: all test stress io-stress sanitize tsan io-tsan valgrind guard-test guard-disabled-test force-poll-build example examples sleep-example channels-example handles-example select-example try-example select-advanced-example echo-server-example clean
 
@@ -145,6 +151,9 @@ $(BUILD_DIR)/test_v0_7_tsan$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
 $(BUILD_DIR)/test_v0_7_poll_tsan$(EXE): tests/test_v0_7.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
 	$(CC) $(TEST_CPPFLAGS) -DMT_FORCE_POLL_BACKEND -fsanitize=thread -g -O1 $(SRC) $(ASM_SRC) $< $(LDLIBS) -o $@
+$(BUILD_DIR)/test_public_api$(EXE): tests/test_public_api.c $(LIB)
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
 
 $(BUILD_DIR)/libmicrothread_poll.a: $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@) $(BUILD_DIR)/src
@@ -158,7 +167,7 @@ $(BUILD_DIR)/libmicrothread_poll.a: $(SRC) $(ASM_SRC)
 	@if echo "$(SRC)" | grep -q 'context_asm.c'; then \
 		$(CC) $(FORCE_POLL_CPPFLAGS) $(CFLAGS) -c src/context_asm.c -o $(BUILD_DIR)/src/context_asm_poll.o; \
 	fi
-	ar rcs $@ $(BUILD_DIR)/src/*_poll.o
+	ar rcs $@ $(POLL_OBJ)
 
 $(BUILD_DIR)/test_guard_overflow$(EXE): tests/test_guard_overflow.c $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@)
@@ -204,7 +213,7 @@ $(BUILD_DIR)/echo_server$(EXE): examples/echo_server.c $(LIB)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
 
-test: $(BUILD_DIR)/test_v0_1$(EXE) $(BUILD_DIR)/test_v0_2$(EXE) $(BUILD_DIR)/test_v0_3$(EXE) $(BUILD_DIR)/test_v0_4$(EXE) $(BUILD_DIR)/test_v0_5$(EXE) $(BUILD_DIR)/test_v0_6$(EXE) $(BUILD_DIR)/test_v0_7$(EXE) $(BUILD_DIR)/test_v0_7_poll$(EXE) $(BUILD_DIR)/test_guard_disabled$(EXE)
+test: $(BUILD_DIR)/test_v0_1$(EXE) $(BUILD_DIR)/test_v0_2$(EXE) $(BUILD_DIR)/test_v0_3$(EXE) $(BUILD_DIR)/test_v0_4$(EXE) $(BUILD_DIR)/test_v0_5$(EXE) $(BUILD_DIR)/test_v0_6$(EXE) $(BUILD_DIR)/test_v0_7$(EXE) $(BUILD_DIR)/test_v0_7_poll$(EXE) $(BUILD_DIR)/test_public_api$(EXE) $(BUILD_DIR)/test_guard_disabled$(EXE)
 	$(BUILD_DIR)/test_v0_1$(EXE)
 	$(BUILD_DIR)/test_v0_2$(EXE)
 	$(BUILD_DIR)/test_v0_3$(EXE)
@@ -213,6 +222,7 @@ test: $(BUILD_DIR)/test_v0_1$(EXE) $(BUILD_DIR)/test_v0_2$(EXE) $(BUILD_DIR)/tes
 	$(BUILD_DIR)/test_v0_6$(EXE)
 	$(BUILD_DIR)/test_v0_7$(EXE)
 	$(BUILD_DIR)/test_v0_7_poll$(EXE)
+	$(BUILD_DIR)/test_public_api$(EXE)
 	$(BUILD_DIR)/test_guard_disabled$(EXE)
 
 stress: $(BUILD_DIR)/test_v0_1_full$(EXE) $(BUILD_DIR)/test_v0_2_full$(EXE) $(BUILD_DIR)/test_v0_3_full$(EXE) $(BUILD_DIR)/test_v0_4_full$(EXE)

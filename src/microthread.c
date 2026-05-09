@@ -195,6 +195,7 @@ typedef struct mt_runtime {
     int stopping;
     int run_result;
     int next_id;
+    size_t default_stack_size;
     size_t worker_count;
     size_t active_workers;
     size_t running_tasks;
@@ -1356,6 +1357,20 @@ static void mt_fd_generation_bump(int fd) {
     g_rt.fd_generations = g;
 }
 
+static int mt_fd_generation_remove(int fd) {
+    mt_fd_generation_t **link = &g_rt.fd_generations;
+    while (*link) {
+        if ((*link)->fd == fd) {
+            mt_fd_generation_t *old = *link;
+            *link = old->next;
+            free(old);
+            return 1;
+        }
+        link = &(*link)->next;
+    }
+    return 0;
+}
+
 static void mt_io_drain_wake_pipe(void) {
     if (g_rt.io_wake_read_fd < 0) {
         return;
@@ -2114,7 +2129,8 @@ static int mt_create_task_internal(mt_fn fn,
         return MT_ERR_NOMEM;
     }
 
-    int rc = mt_stack_alloc(&task->stack, stack_size);
+    size_t effective_stack_size = stack_size != 0 ? stack_size : g_rt.default_stack_size;
+    int rc = mt_stack_alloc(&task->stack, effective_stack_size);
     if (rc != MT_OK) {
         mt_free_task_memory(task);
         if (handle) {
@@ -2157,12 +2173,21 @@ static int mt_create_task_internal(mt_fn fn,
     return task->id;
 }
 
-int mt_init(void) {
+int mt_init_with_options(const mt_options_t *options) {
     if (g_rt.initialized) {
         return MT_OK;
     }
 
+    size_t default_stack_size = MT_DEFAULT_STACK_SIZE;
+    if (options && options->stack_size != 0) {
+        if (options->stack_size < MT_MIN_STACK_SIZE) {
+            return MT_ERR_INVALID;
+        }
+        default_stack_size = options->stack_size;
+    }
+
     memset(&g_rt, 0, sizeof(g_rt));
+    g_rt.default_stack_size = default_stack_size;
     g_rt.io_backend_kind = MT_IO_BACKEND_NONE;
     g_rt.io_backend_fd = -1;
     g_rt.io_wake_read_fd = -1;
@@ -2205,6 +2230,10 @@ int mt_init(void) {
     g_rt.worker_count = 1;
     g_rt.run_result = MT_OK;
     return MT_OK;
+}
+
+int mt_init(void) {
+    return mt_init_with_options(NULL);
 }
 
 int mt_go(mt_fn fn, void *arg) {
@@ -3261,6 +3290,35 @@ int mt_fd_set_nonblocking(int fd) {
 #endif
 }
 
+int mt_fd_adopt(int fd) {
+    int rc = mt_fd_set_nonblocking(fd);
+    if (rc != MT_OK) {
+        return rc;
+    }
+    mt_lock();
+    if (mt_fd_is_closing(fd)) {
+        mt_unlock();
+        return MT_ERR_CLOSED;
+    }
+    uint64_t gen = mt_fd_generation_current(fd);
+    mt_unlock();
+    return gen == 0 ? MT_ERR_NOMEM : MT_OK;
+}
+
+int mt_fd_release(int fd) {
+    if (fd < 0) {
+        return MT_ERR_INVALID;
+    }
+    mt_lock();
+    if (mt_fd_is_closing(fd) || mt_fd_waiter_conflicts(fd, MT_FD_READ | MT_FD_WRITE)) {
+        mt_unlock();
+        return MT_ERR_STATE;
+    }
+    (void)mt_fd_generation_remove(fd);
+    mt_unlock();
+    return MT_OK;
+}
+
 const char *mt_io_backend_name(void) {
     if (!g_rt.initialized) {
         return "none";
@@ -3382,7 +3440,7 @@ ssize_t mt_fd_read(int fd, void *buf, size_t len, uint64_t timeout_ms) {
     if (len == 0) {
         return 0;
     }
-    int nb_rc = mt_fd_set_nonblocking(fd);
+    int nb_rc = mt_fd_adopt(fd);
     if (nb_rc != MT_OK) {
         return nb_rc;
     }
@@ -3413,7 +3471,7 @@ ssize_t mt_fd_write(int fd, const void *buf, size_t len, uint64_t timeout_ms) {
     if (len == 0) {
         return 0;
     }
-    int nb_rc = mt_fd_set_nonblocking(fd);
+    int nb_rc = mt_fd_adopt(fd);
     if (nb_rc != MT_OK) {
         return nb_rc;
     }
@@ -3491,7 +3549,7 @@ int mt_net_listen_tcp(const char *host, const char *port, int backlog) {
         int yes = 1;
         (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
         if (bind(fd, ai->ai_addr, ai->ai_addrlen) == 0 && listen(fd, backlog) == 0) {
-            if (mt_fd_set_nonblocking(fd) == MT_OK) {
+            if (mt_fd_adopt(fd) == MT_OK) {
                 listen_fd = fd;
                 break;
             }
@@ -3507,7 +3565,7 @@ int mt_net_accept(int listen_fd, struct sockaddr *addr, socklen_t *addrlen,
     if (listen_fd < 0) {
         return MT_ERR_INVALID;
     }
-    int nb_rc = mt_fd_set_nonblocking(listen_fd);
+    int nb_rc = mt_fd_adopt(listen_fd);
     if (nb_rc != MT_OK) {
         return nb_rc;
     }
@@ -3515,7 +3573,7 @@ int mt_net_accept(int listen_fd, struct sockaddr *addr, socklen_t *addrlen,
     for (;;) {
         int fd = accept(listen_fd, addr, addrlen);
         if (fd >= 0) {
-            if (mt_fd_set_nonblocking(fd) != MT_OK) {
+            if (mt_fd_adopt(fd) != MT_OK) {
                 close(fd);
                 return MT_ERR;
             }
@@ -3546,7 +3604,7 @@ ssize_t mt_net_write(int fd, const void *buf, size_t len, uint64_t timeout_ms) {
     if (len == 0) {
         return 0;
     }
-    int nb_rc = mt_fd_set_nonblocking(fd);
+    int nb_rc = mt_fd_adopt(fd);
     if (nb_rc != MT_OK) {
         return nb_rc;
     }
@@ -3590,6 +3648,14 @@ int mt_net_close(int fd) {
 }
 #else
 int mt_fd_set_nonblocking(int fd) {
+    return fd < 0 ? MT_ERR_INVALID : MT_ERR_STATE;
+}
+
+int mt_fd_adopt(int fd) {
+    return fd < 0 ? MT_ERR_INVALID : MT_ERR_STATE;
+}
+
+int mt_fd_release(int fd) {
     return fd < 0 ? MT_ERR_INVALID : MT_ERR_STATE;
 }
 
@@ -3762,6 +3828,21 @@ void mt_shutdown(void) {
     mt_unlock();
 #endif
     memset(&g_rt, 0, sizeof(g_rt));
+}
+
+const char *mt_strerror(int rc) {
+    switch (rc) {
+        case MT_OK: return "ok";
+        case MT_ERR: return "microthread error";
+        case MT_ERR_INVALID: return "invalid argument";
+        case MT_ERR_NOMEM: return "out of memory";
+        case MT_ERR_STATE: return "invalid runtime state";
+        case MT_ERR_CLOSED: return "closed";
+        case MT_ERR_CANCELLED: return "cancelled";
+        case MT_ERR_WOULD_BLOCK: return "operation would block";
+        case MT_ERR_TIMEOUT: return "operation timed out";
+        default: return "unknown microthread error";
+    }
 }
 
 size_t mt_debug_runnable_count(void) {
