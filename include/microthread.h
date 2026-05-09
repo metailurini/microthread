@@ -72,7 +72,11 @@ enum {
     MT_ERR_CLOSED = -5,
     MT_ERR_CANCELLED = -6,
     MT_ERR_WOULD_BLOCK = -7,
-    MT_ERR_TIMEOUT = -8
+    MT_ERR_TIMEOUT = -8,
+    MT_ERR_IO = -9,
+    MT_ERR_BACKEND = -10,
+    MT_ERR_ADDRINFO = -11,
+    MT_ERR_UNSUPPORTED = -12
 };
 
 enum {
@@ -94,6 +98,8 @@ void mt_yield(void);
 void mt_sleep_ms(uint64_t ms);
 void mt_shutdown(void);
 const char *mt_strerror(int rc);
+const char *mt_task_status_name(mt_task_status_t status);
+int  mt_last_os_error(void);
 
 int  mt_join(mt_task_handle_t *task);
 int  mt_task_cancel(mt_task_handle_t *task);
@@ -141,11 +147,11 @@ int     mt_net_close(int fd);
 const char *mt_io_backend_name(void);
 
 /*
- * Lightweight diagnostics. These are stable enough for tests and local
- * debugging, but should not be used as synchronization primitives. Projects
- * that want to keep public API includes smaller can include
- * <microthread_debug.h> for the same declarations.
+ * Diagnostic counters are declared by <microthread_debug.h>. Define
+ * MT_ENABLE_DEBUG_API before including this header only when intentionally
+ * opting into those unstable local-debugging helpers.
  */
+#ifdef MT_ENABLE_DEBUG_API
 size_t mt_debug_runnable_count(void);
 size_t mt_debug_live_task_count(void);
 size_t mt_debug_completed_task_count(void);
@@ -154,6 +160,7 @@ size_t mt_debug_channel_waiting_task_count(void);
 size_t mt_debug_join_waiting_task_count(void);
 size_t mt_debug_fd_waiting_task_count(void);
 int    mt_debug_current_task_id(void);
+#endif
 
 #ifdef MT_TESTING
 void   mt_test_fail_next_task_alloc(void);

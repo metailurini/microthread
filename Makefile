@@ -4,7 +4,7 @@ CPPFLAGS ?= -Iinclude
 TEST_CPPFLAGS := $(CPPFLAGS) -DMT_TESTING
 FORCE_POLL_CPPFLAGS := $(CPPFLAGS) -DMT_FORCE_POLL_BACKEND
 
-SRC := src/microthread.c
+SRC := src/microthread.c src/status.c
 ASM_SRC :=
 
 ifeq ($(OS),Windows_NT)
@@ -29,7 +29,7 @@ CFLAGS += $(THREAD_FLAGS)
 BUILD_DIR := build
 LIB := $(BUILD_DIR)/libmicrothread.a
 OBJ := $(SRC:%.c=$(BUILD_DIR)/%.o) $(ASM_SRC:%.S=$(BUILD_DIR)/%.o)
-POLL_OBJ := $(BUILD_DIR)/src/microthread_poll.o
+POLL_OBJ := $(BUILD_DIR)/src/microthread_poll.o $(BUILD_DIR)/src/status_poll.o
 ifeq ($(UNAME_S),Darwin)
 POLL_OBJ += $(BUILD_DIR)/src/context_asm_poll.o $(BUILD_DIR)/src/context_asm_macos_poll.o
 else ifneq ($(OS),Windows_NT)
@@ -158,6 +158,7 @@ $(BUILD_DIR)/test_public_api$(EXE): tests/test_public_api.c $(LIB)
 $(BUILD_DIR)/libmicrothread_poll.a: $(SRC) $(ASM_SRC)
 	@mkdir -p $(dir $@) $(BUILD_DIR)/src
 	$(CC) $(FORCE_POLL_CPPFLAGS) $(CFLAGS) -c src/microthread.c -o $(BUILD_DIR)/src/microthread_poll.o
+	$(CC) $(FORCE_POLL_CPPFLAGS) $(CFLAGS) -c src/status.c -o $(BUILD_DIR)/src/status_poll.o
 	@if [ -n "$(ASM_SRC)" ]; then \
 		$(CC) $(FORCE_POLL_CPPFLAGS) $(CFLAGS) -c $(ASM_SRC) -o $(BUILD_DIR)/src/context_asm_macos_poll.o; \
 	fi

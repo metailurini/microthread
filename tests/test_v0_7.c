@@ -6,6 +6,7 @@
 #endif
 
 #include "microthread.h"
+#include "microthread_debug.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -1387,6 +1388,10 @@ static void test_documentation_contracts(void) {
     require_file_contains("README.md", "blocking OS I/O");
     require_file_contains("README.md", "mt_fd_close");
     require_file_contains("README.md", "MT_FORCE_POLL_BACKEND");
+    require_file_contains("README.md", "mt_task_status_name");
+    require_file_contains("README.md", "mt_last_os_error");
+    require_file_contains("README.md", "microthread_debug.h");
+    require_file_contains("README.md", "does not restore the fd's previous blocking flags");
     require_file_contains("README.md", "not an HTTP framework");
     require_file_contains("examples/echo_server.c", "mt_net_accept");
     require_file_contains("examples/echo_server.c", "mt_net_read");

@@ -6,6 +6,7 @@
 #define MT_TESTING
 #endif
 #include "microthread.h"
+#include "microthread_debug.h"
 
 #include <assert.h>
 #include <stdint.h>

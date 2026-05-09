@@ -42,6 +42,8 @@ int mt_fd_wait(int fd, int events, uint64_t timeout_ms, int *ready_events);
 ssize_t mt_fd_read(int fd, void *buf, size_t len, uint64_t timeout_ms);
 ssize_t mt_fd_write(int fd, const void *buf, size_t len, uint64_t timeout_ms);
 int mt_fd_close(int fd);
+const char *mt_task_status_name(mt_task_status_t status);
+int mt_last_os_error(void);
 ```
 
 Socket convenience wrappers may be added in the same release or a follow-up:
@@ -149,7 +151,8 @@ For `mt_fd_read()` / `mt_fd_write()`:
 - **TC-FD-NONBLOCK-003A**: `mt_fd_adopt(fd)` makes a descriptor nonblocking and
   prepares descriptor-generation metadata for MicroThread I/O.
 - **TC-FD-NONBLOCK-003B**: `mt_fd_release(fd)` removes MicroThread descriptor
-  metadata without closing the descriptor and rejects release while a waiter is active.
+  metadata without closing the descriptor, rejects release while a waiter is active,
+  and documents that it does not restore the descriptor's previous blocking flags.
 - **TC-FD-NONBLOCK-004**: fd wait APIs reject negative descriptors.
 - **TC-FD-NONBLOCK-005**: fd wait APIs reject unsupported event masks.
 - **TC-FD-NONBLOCK-006**: fd wait APIs validate null output pointers where output
@@ -471,6 +474,10 @@ For `mt_fd_read()` / `mt_fd_write()`:
   servers on top of raw sockets.
 - **TC-IO-DOC-009**: changelog/release notes explain that v0.7 is a network I/O
   foundation, not an HTTP server framework.
+- **TC-IO-DOC-010**: debug counters are documented as an opt-in diagnostics API
+  through `<microthread_debug.h>`, not as the default stable application surface.
+- **TC-IO-DOC-011**: API docs expose readable status/error helpers such as
+  `mt_task_status_name()` and `mt_strerror()`.
 
 ## Acceptance Criteria
 

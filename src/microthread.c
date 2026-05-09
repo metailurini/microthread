@@ -3648,15 +3648,15 @@ int mt_net_close(int fd) {
 }
 #else
 int mt_fd_set_nonblocking(int fd) {
-    return fd < 0 ? MT_ERR_INVALID : MT_ERR_STATE;
+    return fd < 0 ? MT_ERR_INVALID : MT_ERR_UNSUPPORTED;
 }
 
 int mt_fd_adopt(int fd) {
-    return fd < 0 ? MT_ERR_INVALID : MT_ERR_STATE;
+    return fd < 0 ? MT_ERR_INVALID : MT_ERR_UNSUPPORTED;
 }
 
 int mt_fd_release(int fd) {
-    return fd < 0 ? MT_ERR_INVALID : MT_ERR_STATE;
+    return fd < 0 ? MT_ERR_INVALID : MT_ERR_UNSUPPORTED;
 }
 
 const char *mt_io_backend_name(void) {
@@ -3669,7 +3669,7 @@ int mt_fd_wait(int fd, int events, uint64_t timeout_ms, int *ready_events) {
     if (ready_events) {
         *ready_events = 0;
     }
-    return fd < 0 || !ready_events ? MT_ERR_INVALID : MT_ERR_STATE;
+    return fd < 0 || !ready_events ? MT_ERR_INVALID : MT_ERR_UNSUPPORTED;
 }
 
 int mt_fd_wait_read(int fd, uint64_t timeout_ms) {
@@ -3686,24 +3686,24 @@ ssize_t mt_fd_read(int fd, void *buf, size_t len, uint64_t timeout_ms) {
     (void)buf;
     (void)len;
     (void)timeout_ms;
-    return fd < 0 ? MT_ERR_INVALID : MT_ERR_STATE;
+    return fd < 0 ? MT_ERR_INVALID : MT_ERR_UNSUPPORTED;
 }
 
 ssize_t mt_fd_write(int fd, const void *buf, size_t len, uint64_t timeout_ms) {
     (void)buf;
     (void)len;
     (void)timeout_ms;
-    return fd < 0 ? MT_ERR_INVALID : MT_ERR_STATE;
+    return fd < 0 ? MT_ERR_INVALID : MT_ERR_UNSUPPORTED;
 }
 
 int mt_fd_close(int fd) {
-    return fd < 0 ? MT_ERR_INVALID : MT_ERR_STATE;
+    return fd < 0 ? MT_ERR_INVALID : MT_ERR_UNSUPPORTED;
 }
 
 int mt_net_listen_tcp(const char *host, const char *port, int backlog) {
     (void)host;
     (void)backlog;
-    return port ? MT_ERR_STATE : MT_ERR_INVALID;
+    return port ? MT_ERR_UNSUPPORTED : MT_ERR_INVALID;
 }
 
 int mt_net_accept(int listen_fd, struct sockaddr *addr, socklen_t *addrlen,
@@ -3711,7 +3711,7 @@ int mt_net_accept(int listen_fd, struct sockaddr *addr, socklen_t *addrlen,
     (void)addr;
     (void)addrlen;
     (void)timeout_ms;
-    return listen_fd < 0 ? MT_ERR_INVALID : MT_ERR_STATE;
+    return listen_fd < 0 ? MT_ERR_INVALID : MT_ERR_UNSUPPORTED;
 }
 
 ssize_t mt_net_read(int fd, void *buf, size_t len, uint64_t timeout_ms) {
@@ -3828,21 +3828,6 @@ void mt_shutdown(void) {
     mt_unlock();
 #endif
     memset(&g_rt, 0, sizeof(g_rt));
-}
-
-const char *mt_strerror(int rc) {
-    switch (rc) {
-        case MT_OK: return "ok";
-        case MT_ERR: return "microthread error";
-        case MT_ERR_INVALID: return "invalid argument";
-        case MT_ERR_NOMEM: return "out of memory";
-        case MT_ERR_STATE: return "invalid runtime state";
-        case MT_ERR_CLOSED: return "closed";
-        case MT_ERR_CANCELLED: return "cancelled";
-        case MT_ERR_WOULD_BLOCK: return "operation would block";
-        case MT_ERR_TIMEOUT: return "operation timed out";
-        default: return "unknown microthread error";
-    }
 }
 
 size_t mt_debug_runnable_count(void) {

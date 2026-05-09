@@ -27,6 +27,9 @@ int main(void) {
     assert(mt_init_with_options(&opts) == MT_OK);
     assert(strcmp(mt_strerror(MT_OK), "ok") == 0);
     assert(mt_strerror(MT_ERR_TIMEOUT) != NULL);
+    assert(mt_strerror(MT_ERR_UNSUPPORTED) != NULL);
+    assert(strcmp(mt_task_status_name(MT_TASK_STATUS_WAITING_FD), "waiting_fd") == 0);
+    assert(mt_last_os_error() >= 0 || mt_last_os_error() < 0);
     assert(mt_debug_live_task_count() == 0);
 
     assert(mt_go(simple_task, NULL) > 0);
