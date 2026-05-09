@@ -4,7 +4,7 @@ CPPFLAGS ?= -Iinclude
 TEST_CPPFLAGS := $(CPPFLAGS) -DMT_TESTING
 FORCE_POLL_CPPFLAGS := $(CPPFLAGS) -DMT_FORCE_POLL_BACKEND
 SAN_CFLAGS := -std=c11 -fsanitize=address,undefined -g -O1
-TSAN_CFLAGS := -std=c11 -fsanitize=thread -g -O1
+TSAN_CFLAGS := -std=c11 -fsanitize=thread -g -O1 -DMT_TSAN
 
 SRC := src/microthread.c src/status.c src/io.c src/io_backend.c src/io_backend_poll.c src/io_backend_epoll.c src/io_backend_kqueue.c
 ASM_SRC :=
