@@ -219,6 +219,22 @@ const char *mt_io_backend_name_locked(void) {
     }
 }
 
+static int mt_fd_waiter_is_active(const mt_fd_waiter_t *waiter) {
+    return waiter && waiter->state == MT_FD_WAITER_ACTIVE;
+}
+
+static int mt_fd_waiter_reserves_conflict(const mt_fd_waiter_t *waiter) {
+    return waiter &&
+           (waiter->state == MT_FD_WAITER_ACTIVE ||
+            waiter->state == MT_FD_WAITER_READY_RESERVED);
+}
+
+static void mt_fd_waiter_set_state(mt_fd_waiter_t *waiter,
+                                   mt_fd_waiter_state_t state) {
+    assert(waiter != NULL);
+    waiter->state = state;
+}
+
 int mt_io_backend_add(mt_fd_waiter_t *waiter) {
     if (!waiter) {
         return MT_ERR_INVALID;
@@ -278,7 +294,7 @@ void mt_io_backend_remove(mt_fd_waiter_t *waiter) {
 
 mt_fd_waiter_t *mt_fd_find_waiter(int fd, int ready_events) {
     for (mt_fd_waiter_t *w = g_rt.fd_waiters; w; w = w->next) {
-        if (w->active && w->fd == fd && (w->events & ready_events) != 0) {
+        if (mt_fd_waiter_is_active(w) && w->fd == fd && (w->events & ready_events) != 0) {
             if (w->generation == mt_fd_generation_current(fd)) {
                 return w;
             }
@@ -292,7 +308,7 @@ mt_fd_waiter_t *mt_fd_find_waiter(int fd, int ready_events) {
 int mt_fd_active_events_for_fd(int fd, mt_fd_waiter_t *exclude, int extra_events) {
     int active = extra_events;
     for (mt_fd_waiter_t *w = g_rt.fd_waiters; w; w = w->next) {
-        if (w != exclude && w->active && w->fd == fd) {
+        if (w != exclude && mt_fd_waiter_is_active(w) && w->fd == fd) {
             active |= w->events;
         }
     }
@@ -301,8 +317,8 @@ int mt_fd_active_events_for_fd(int fd, mt_fd_waiter_t *exclude, int extra_events
 
 int mt_fd_waiter_conflicts(int fd, int events) {
     for (mt_fd_waiter_t *w = g_rt.fd_waiters; w; w = w->next) {
-        if ((w->active || w->pending_ready) &&
-            w->fd == fd && (w->events & events) != 0) {
+        if (mt_fd_waiter_reserves_conflict(w) && w->fd == fd &&
+            (w->events & events) != 0) {
             return 1;
         }
     }
@@ -327,9 +343,11 @@ static int mt_fd_waiter_deactivate(mt_fd_waiter_t *waiter, int keep_conflict_res
         return 0;
     }
 
-    int was_active = waiter->active;
-    if (waiter->active) {
-        waiter->active = 0;
+    int was_active = mt_fd_waiter_is_active(waiter);
+    if (was_active) {
+        mt_fd_waiter_set_state(waiter, keep_conflict_reserved
+            ? MT_FD_WAITER_READY_RESERVED
+            : MT_FD_WAITER_REMOVED);
         mt_io_backend_remove(waiter);
         if (g_rt.fd_waiting_count > 0) {
             g_rt.fd_waiting_count--;
@@ -337,9 +355,9 @@ static int mt_fd_waiter_deactivate(mt_fd_waiter_t *waiter, int keep_conflict_res
     }
 
     if (keep_conflict_reserved) {
-        waiter->pending_ready = 1;
+        mt_fd_waiter_set_state(waiter, MT_FD_WAITER_READY_RESERVED);
     } else {
-        waiter->pending_ready = 0;
+        mt_fd_waiter_set_state(waiter, MT_FD_WAITER_REMOVED);
         mt_fd_waiter_unlink(waiter);
     }
 
@@ -354,8 +372,7 @@ int mt_fd_waiter_add(mt_fd_waiter_t *waiter) {
     if (rc != MT_OK) {
         return rc;
     }
-    waiter->active = 1;
-    waiter->pending_ready = 0;
+    mt_fd_waiter_set_state(waiter, MT_FD_WAITER_ACTIVE);
     waiter->next = g_rt.fd_waiters;
     g_rt.fd_waiters = waiter;
     g_rt.fd_waiting_count++;
@@ -455,7 +472,7 @@ void mt_fd_wake_all(int result) {
     mt_fd_waiter_t *w = g_rt.fd_waiters;
     while (w) {
         mt_fd_waiter_t *next = w->next;
-        if (w->active) {
+        if (mt_fd_waiter_is_active(w)) {
             mt_fd_ready_waiter(w, result, 0);
         }
         w = next;
@@ -467,7 +484,7 @@ void mt_fd_wake_for_close(int fd) {
     mt_fd_waiter_t *w = g_rt.fd_waiters;
     while (w) {
         mt_fd_waiter_t *next = w->next;
-        if (w->active && w->fd == fd) {
+        if (mt_fd_waiter_is_active(w) && w->fd == fd) {
             mt_fd_ready_waiter(w, MT_ERR_CLOSED, 0);
         }
         w = next;
@@ -507,7 +524,7 @@ void mt_fd_wake_all(int result) {
     mt_fd_waiter_t *w = g_rt.fd_waiters;
     while (w) {
         mt_fd_waiter_t *next = w->next;
-        if (w->active) {
+        if (w->state == MT_FD_WAITER_ACTIVE) {
             mt_fd_ready_waiter(w, result, 0);
         }
         w = next;

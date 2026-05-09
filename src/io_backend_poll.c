@@ -28,7 +28,7 @@ int mt_poll_revents_to_fd_events(short revents) {
 void mt_poll_backend_wait_locked(int timeout_ms) {
     size_t count = 1;
     for (mt_fd_waiter_t *w = g_rt.fd_waiters; w; w = w->next) {
-        if (w->active) {
+        if (w->state == MT_FD_WAITER_ACTIVE) {
             count++;
         }
     }
@@ -42,7 +42,7 @@ void mt_poll_backend_wait_locked(int timeout_ms) {
     pfds[i].revents = 0;
     i++;
     for (mt_fd_waiter_t *w = g_rt.fd_waiters; w; w = w->next) {
-        if (!w->active) {
+        if (w->state != MT_FD_WAITER_ACTIVE) {
             continue;
         }
         pfds[i].fd = w->fd;
