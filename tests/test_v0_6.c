@@ -2,6 +2,7 @@
 #define MT_TESTING
 #endif
 #include "microthread.h"
+#include "microthread_testing.h"
 
 #include <pthread.h>
 #include <sched.h>

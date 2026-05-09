@@ -1,249 +1,18 @@
-#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
-#define _DARWIN_C_SOURCE
-#endif
-#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
-#define _POSIX_C_SOURCE 200809L
-#endif
+#include "runtime_internal.h"
 
-#include "microthread.h"
-
-#include "context.h"
-
-#include <errno.h>
-#include <limits.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#define MT_HAS_OS_THREADS 0
-#else
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <pthread.h>
-#include <poll.h>
-#include <sys/mman.h>
-#include <sys/socket.h>
-#include <time.h>
-#include <unistd.h>
-#if defined(__linux__) && !defined(MT_FORCE_POLL_BACKEND)
-#include <sys/epoll.h>
-#define MT_HAVE_EPOLL 1
-#elif (defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)) && !defined(MT_FORCE_POLL_BACKEND)
-#include <sys/event.h>
-#define MT_HAVE_KQUEUE 1
-#endif
-#define MT_HAS_OS_THREADS 1
-#if !defined(MAP_ANONYMOUS) && defined(MAP_ANON)
-#define MAP_ANONYMOUS MAP_ANON
-#endif
-#endif
-
-#define MT_NS_PER_MS UINT64_C(1000000)
-
-typedef enum mt_task_state {
-    MT_TASK_READY = 0,
-    MT_TASK_RUNNING,
-    MT_TASK_SLEEPING,
-    MT_TASK_WAITING_CHAN,
-    MT_TASK_WAITING_SELECT,
-    MT_TASK_WAITING_FD,
-    MT_TASK_WAITING_JOIN,
-    MT_TASK_DEAD
-} mt_task_state_t;
-
-typedef enum mt_chan_wait_kind {
-    MT_CHAN_WAIT_NONE = 0,
-    MT_CHAN_WAIT_SEND,
-    MT_CHAN_WAIT_RECV
-} mt_chan_wait_kind_t;
-
-typedef struct mt_stack {
-    void *mapping;
-    size_t mapping_size;
-    void *usable;
-    size_t usable_size;
-    size_t guard_size;
-    int alloc_kind;
-} mt_stack_t;
-
-typedef struct mt_select_waiter mt_select_waiter_t;
-typedef struct mt_fd_waiter mt_fd_waiter_t;
-
-enum {
-    MT_STACK_ALLOC_NONE = 0,
-    MT_STACK_ALLOC_MMAP = 1,
-    MT_STACK_ALLOC_MALLOC = 2
-};
-
-typedef struct mt_task {
-    int id;
-    mt_fn fn;
-    void *arg;
-    mt_stack_t stack;
-    mt_context_t ctx;
-    mt_task_state_t state;
-    uint64_t wake_ns;
-    uint64_t timer_seq;
-    struct mt_task *next;
-    struct mt_task *wait_next;
-    struct mt_task *all_next;
-    mt_task_handle_t *handle;
-    mt_task_handle_t *join_waiting_on;
-    mt_chan_wait_kind_t chan_wait_kind;
-    mt_chan_t *chan_wait_ch;
-    void *chan_value;
-    int chan_result;
-    int join_result;
-    mt_select_waiter_t *select_waiters;
-    size_t select_waiter_count;
-    size_t select_index;
-    int select_result;
-    int select_in_timer;
-    int select_counted_waiting;
-    mt_fd_waiter_t *fd_waiter;
-    int fd_result;
-    int fd_ready_events;
-    int fd_in_timer;
-} mt_task_t;
-
-typedef struct mt_fd_generation {
-    int fd;
-    uint64_t generation;
-    int closing;
-    struct mt_fd_generation *next;
-} mt_fd_generation_t;
-
-struct mt_select_waiter {
-    mt_task_t *task;
-    mt_chan_t *ch;
-    mt_select_op_t op;
-    void *value;
-    size_t index;
-    int active;
-    mt_select_waiter_t *task_next;
-    mt_select_waiter_t *chan_next;
-};
-
-struct mt_fd_waiter {
-    mt_task_t *task;
-    int fd;
-    int events;
-    uint64_t generation;
-    int ready_events;
-    int active;
-    mt_fd_waiter_t *next;
-};
-
-typedef enum mt_io_backend_kind {
-    MT_IO_BACKEND_NONE = 0,
-    MT_IO_BACKEND_POLL,
-    MT_IO_BACKEND_EPOLL,
-    MT_IO_BACKEND_KQUEUE
-} mt_io_backend_kind_t;
-
-struct mt_task_handle {
-    mt_task_t *task;
-    mt_task_status_t status;
-    int cancel_requested;
-    int completed;
-    int released;
-    int join_result;
-    mt_task_t *join_head;
-    mt_task_t *join_tail;
-    size_t join_waiters;
-    struct mt_task_handle *registry_next;
-};
-
-struct mt_chan {
-    size_t elem_size;
-    size_t capacity;
-    size_t len;
-    size_t head;
-    size_t tail;
-    unsigned char *buffer;
-    int closed;
-    mt_task_t *send_head;
-    mt_task_t *send_tail;
-    mt_task_t *recv_head;
-    mt_task_t *recv_tail;
-    size_t send_waiters;
-    size_t recv_waiters;
-    mt_select_waiter_t *select_send_head;
-    mt_select_waiter_t *select_send_tail;
-    mt_select_waiter_t *select_recv_head;
-    mt_select_waiter_t *select_recv_tail;
-    size_t select_send_waiters;
-    size_t select_recv_waiters;
-    struct mt_chan *registry_next;
-};
-
-typedef struct mt_timer_heap {
-    mt_task_t **items;
-    size_t len;
-    size_t cap;
-    uint64_t next_seq;
-} mt_timer_heap_t;
-
-typedef struct mt_runtime {
-    int initialized;
-    int running;
-    int stopping;
-    int run_result;
-    int next_id;
-    size_t default_stack_size;
-    size_t worker_count;
-    size_t active_workers;
-    size_t running_tasks;
-#if MT_HAS_OS_THREADS
-    pthread_mutex_t lock;
-    pthread_cond_t cond;
-    pthread_t *workers;
-    size_t worker_threads;
-#endif
-    mt_context_t scheduler_ctx;
-    mt_task_t *current;
-    mt_task_t *all_tasks;
-    mt_task_t *runq_head;
-    mt_task_t *runq_tail;
-    mt_chan_t *channels;
-    mt_task_handle_t *handles;
-    mt_timer_heap_t timers;
-    size_t runnable_count;
-    size_t live_count;
-    size_t completed_count;
-    size_t channel_waiting_count;
-    size_t join_waiting_count;
-    mt_fd_waiter_t *fd_waiters;
-    size_t fd_waiting_count;
-    mt_fd_generation_t *fd_generations;
-    mt_io_backend_kind_t io_backend_kind;
-    int io_backend_fd;
-    int io_wake_read_fd;
-    int io_wake_write_fd;
-    int io_polling;
-} mt_runtime_t;
-
-static mt_runtime_t g_rt;
-
-#define MICROTHREAD_EMBEDDED_IMPL 1
-#include "io_backend.h"
+mt_runtime_t g_rt;
 
 #if MT_HAS_OS_THREADS
-static __thread mt_task_t *g_tls_current;
-static __thread mt_context_t *g_tls_scheduler_ctx;
-static __thread int g_tls_worker_index;
+__thread mt_task_t *g_tls_current;
+__thread mt_context_t *g_tls_scheduler_ctx;
+__thread int g_tls_worker_index;
 #else
-static mt_task_t *g_tls_current;
-static mt_context_t *g_tls_scheduler_ctx;
-static int g_tls_worker_index;
+mt_task_t *g_tls_current;
+mt_context_t *g_tls_scheduler_ctx;
+int g_tls_worker_index;
 #endif
 
-static void mt_lock(void) {
+void mt_lock(void) {
 #if MT_HAS_OS_THREADS
     if (g_rt.initialized) {
         pthread_mutex_lock(&g_rt.lock);
@@ -251,7 +20,7 @@ static void mt_lock(void) {
 #endif
 }
 
-static void mt_unlock(void) {
+void mt_unlock(void) {
 #if MT_HAS_OS_THREADS
     if (g_rt.initialized) {
         pthread_mutex_unlock(&g_rt.lock);
@@ -259,7 +28,7 @@ static void mt_unlock(void) {
 #endif
 }
 
-static void mt_notify_one(void) {
+void mt_notify_one(void) {
 #if MT_HAS_OS_THREADS
     if (g_rt.initialized) {
         pthread_cond_signal(&g_rt.cond);
@@ -268,7 +37,7 @@ static void mt_notify_one(void) {
 #endif
 }
 
-static void mt_notify_all(void) {
+void mt_notify_all(void) {
 #if MT_HAS_OS_THREADS
     if (g_rt.initialized) {
         pthread_cond_broadcast(&g_rt.cond);
@@ -277,21 +46,21 @@ static void mt_notify_all(void) {
 #endif
 }
 
-static mt_task_t *mt_current_task(void) {
+mt_task_t *mt_current_task(void) {
     return g_tls_current;
 }
 
-static mt_context_t *mt_current_scheduler_ctx(void) {
+mt_context_t *mt_current_scheduler_ctx(void) {
     return g_tls_scheduler_ctx ? g_tls_scheduler_ctx : &g_rt.scheduler_ctx;
 }
 
-static void mt_runq_push(mt_task_t *task);
-static void mt_select_timeout_ready(mt_task_t *task);
-static void mt_fd_ready_waiter(mt_fd_waiter_t *waiter, int result, int ready_events);
-static void mt_fd_timeout_ready(mt_task_t *task);
-static void mt_poll_fd_waiters_once(uint64_t now_ns);
+void mt_runq_push(mt_task_t *task);
+void mt_select_timeout_ready(mt_task_t *task);
+void mt_fd_ready_waiter(mt_fd_waiter_t *waiter, int result, int ready_events);
+void mt_fd_timeout_ready(mt_task_t *task);
+void mt_poll_fd_waiters_once(uint64_t now_ns);
 #if MT_HAS_OS_THREADS
-static void mt_cond_timedwait_ns(uint64_t delay_ns);
+void mt_cond_timedwait_ns(uint64_t delay_ns);
 #endif
 
 static void mt_task_register(mt_task_t *task) {
@@ -370,20 +139,15 @@ static size_t g_handle_frees;
 static size_t g_select_allocs;
 static size_t g_select_frees;
 static int g_fail_next_fd_waiter_alloc;
-static int g_fail_next_io_backend_init;
-static int g_fail_next_io_backend_register;
-static int g_fail_next_io_backend_unregister;
+int g_fail_next_io_backend_init;
+int g_fail_next_io_backend_register;
+int g_fail_next_io_backend_unregister;
 static size_t g_fd_waiter_allocs;
 static size_t g_fd_waiter_frees;
-static size_t g_io_backend_inits;
-static size_t g_io_backend_shutdowns;
-static size_t g_io_backend_registers;
-static size_t g_io_backend_unregisters;
-
-#define MT_TEST_COUNTER_INC(counter) \
-    ((void)__atomic_add_fetch(&(counter), (size_t)1, __ATOMIC_RELAXED))
-#define MT_TEST_COUNTER_LOAD(counter) \
-    __atomic_load_n(&(counter), __ATOMIC_RELAXED)
+size_t g_io_backend_inits;
+size_t g_io_backend_shutdowns;
+size_t g_io_backend_registers;
+size_t g_io_backend_unregisters;
 
 static void *mt_alloc_task_memory(size_t size) {
     if (g_fail_next_task_alloc) {
@@ -523,7 +287,7 @@ static void mt_free_select_waiter(mt_select_waiter_t *waiter) {
     free(waiter);
 }
 
-static mt_fd_waiter_t *mt_alloc_fd_waiter(void) {
+mt_fd_waiter_t *mt_alloc_fd_waiter(void) {
     if (g_fail_next_fd_waiter_alloc) {
         g_fail_next_fd_waiter_alloc = 0;
         return NULL;
@@ -535,7 +299,7 @@ static mt_fd_waiter_t *mt_alloc_fd_waiter(void) {
     return waiter;
 }
 
-static void mt_free_fd_waiter(mt_fd_waiter_t *waiter) {
+void mt_free_fd_waiter(mt_fd_waiter_t *waiter) {
     if (waiter) {
         MT_TEST_COUNTER_INC(g_fd_waiter_frees);
     }
@@ -603,11 +367,11 @@ static void mt_free_select_waiter(mt_select_waiter_t *waiter) {
     free(waiter);
 }
 
-static mt_fd_waiter_t *mt_alloc_fd_waiter(void) {
+mt_fd_waiter_t *mt_alloc_fd_waiter(void) {
     return (mt_fd_waiter_t *)calloc(1, sizeof(mt_fd_waiter_t));
 }
 
-static void mt_free_fd_waiter(mt_fd_waiter_t *waiter) {
+void mt_free_fd_waiter(mt_fd_waiter_t *waiter) {
     free(waiter);
 }
 #endif
@@ -800,7 +564,7 @@ static uint64_t mt_now_ns_raw(int *ok) {
 #endif
 }
 
-static uint64_t mt_now_ns(void) {
+uint64_t mt_now_ns(void) {
     static _Thread_local uint64_t last_good_ns;
 
 #ifdef MT_TESTING
@@ -878,7 +642,7 @@ static void mt_timer_swap(size_t a, size_t b) {
     g_rt.timers.items[b] = tmp;
 }
 
-static int mt_timer_push_state(mt_task_t *task, uint64_t deadline_ns, mt_task_state_t state) {
+int mt_timer_push_state(mt_task_t *task, uint64_t deadline_ns, mt_task_state_t state) {
     if (mt_timer_reserve(g_rt.timers.len + 1u) != MT_OK) {
         return MT_ERR_NOMEM;
     }
@@ -935,7 +699,7 @@ static mt_task_t *mt_timer_pop(void) {
     return top;
 }
 
-static int mt_timer_remove(mt_task_t *task) {
+int mt_timer_remove(mt_task_t *task) {
     for (size_t i = 0; i < g_rt.timers.len; ++i) {
         if (g_rt.timers.items[i] == task) {
             g_rt.timers.len--;
@@ -995,7 +759,7 @@ static void mt_wake_expired_timers(uint64_t now_ns) {
     }
 }
 
-static void mt_runq_push(mt_task_t *task) {
+void mt_runq_push(mt_task_t *task) {
     task->next = NULL;
     if (!g_rt.runq_tail) {
         g_rt.runq_head = task;
@@ -1221,7 +985,7 @@ static void mt_select_complete_waiter(mt_select_waiter_t *waiter, int result) {
     mt_select_unpark_task(waiter->task, result, waiter->index);
 }
 
-static void mt_select_timeout_ready(mt_task_t *task) {
+void mt_select_timeout_ready(mt_task_t *task) {
     if (!task) {
         return;
     }
@@ -1250,7 +1014,6 @@ static void mt_chan_ready_waiter(mt_task_t *task, int result) {
     mt_runq_push(task);
 }
 
-#include "io_backend.c"
 
 static int mt_chan_remove_waiter(mt_task_t *task) {
     mt_chan_t *ch = task->chan_wait_ch;
@@ -1652,7 +1415,7 @@ static void mt_task_after_switch(mt_task_t *task) {
 }
 
 #if MT_HAS_OS_THREADS
-static void mt_cond_timedwait_ns(uint64_t delay_ns) {
+void mt_cond_timedwait_ns(uint64_t delay_ns) {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     uint64_t nsec = (uint64_t)ts.tv_nsec + (delay_ns % UINT64_C(1000000000));
@@ -2556,7 +2319,6 @@ int mt_chan_is_closed(const mt_chan_t *ch) {
     return closed;
 }
 
-#include "io.c"
 
 void mt_shutdown(void) {
     if (mt_current_task()) {

@@ -6,6 +6,7 @@
 #include <string.h>
 
 #if !defined(_WIN32)
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -37,6 +38,13 @@ int main(void) {
 #if !defined(_WIN32)
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, g_sv) == 0);
     assert(mt_init() == MT_OK);
+    int original_flags = fcntl(g_sv[0], F_GETFL, 0);
+    assert(original_flags >= 0);
+    assert((original_flags & O_NONBLOCK) == 0);
+    assert(mt_fd_adopt(g_sv[0]) == MT_OK);
+    assert((fcntl(g_sv[0], F_GETFL, 0) & O_NONBLOCK) != 0);
+    assert(mt_fd_release(g_sv[0]) == MT_OK);
+    assert((fcntl(g_sv[0], F_GETFL, 0) & O_NONBLOCK) == (original_flags & O_NONBLOCK));
     assert(mt_fd_adopt(g_sv[0]) == MT_OK);
     assert(mt_fd_adopt(g_sv[1]) == MT_OK);
     assert(mt_go(public_reader, NULL) > 0);

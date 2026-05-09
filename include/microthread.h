@@ -120,74 +120,11 @@ int        mt_chan_is_closed(const mt_chan_t *ch);
 
 int        mt_select(mt_select_case_t *cases, size_t count, size_t *selected_index);
 
-int     mt_fd_set_nonblocking(int fd);
-int     mt_fd_adopt(int fd);
-int     mt_fd_release(int fd);
-int     mt_fd_wait_read(int fd, uint64_t timeout_ms);
-int     mt_fd_wait_write(int fd, uint64_t timeout_ms);
-int     mt_fd_wait(int fd, int events, uint64_t timeout_ms, int *ready_events);
-ssize_t mt_fd_read(int fd, void *buf, size_t len, uint64_t timeout_ms);
-ssize_t mt_fd_write(int fd, const void *buf, size_t len, uint64_t timeout_ms);
-int     mt_fd_close(int fd);
-
-/*
- * v0.7 fd waits use finite millisecond timeouts. A timeout of 0 performs an
- * immediate readiness check. Use a very large timeout when a practical
- * "wait forever" is desired. Descriptors waited on by MicroThread should be
- * closed with mt_fd_close()/mt_net_close(), not raw close(), so waiters can be
- * woken and descriptor-reuse guards stay valid.
- */
-
-int     mt_net_listen_tcp(const char *host, const char *port, int backlog);
-int     mt_net_accept(int listen_fd, struct sockaddr *addr, socklen_t *addrlen,
-                      uint64_t timeout_ms);
-ssize_t mt_net_read(int fd, void *buf, size_t len, uint64_t timeout_ms);
-ssize_t mt_net_write(int fd, const void *buf, size_t len, uint64_t timeout_ms);
-int     mt_net_close(int fd);
-const char *mt_io_backend_name(void);
+#include "microthread_io.h"
 
 /* Diagnostic counters are declared by <microthread_debug.h>. */
 
-#ifdef MT_TESTING
-void   mt_test_fail_next_task_alloc(void);
-void   mt_test_fail_next_stack_alloc(void);
-void   mt_test_fail_next_context_make(void);
-void   mt_test_fail_next_timer_alloc(void);
-void   mt_test_fail_next_clock_read(void);
-void   mt_test_fail_next_channel_alloc(void);
-void   mt_test_fail_next_channel_buffer_alloc(void);
-void   mt_test_fail_next_handle_alloc(void);
-void   mt_test_fail_next_select_alloc(void);
-void   mt_test_fail_next_fd_waiter_alloc(void);
-void   mt_test_fail_next_io_backend_init(void);
-void   mt_test_fail_next_io_backend_register(void);
-void   mt_test_fail_next_io_backend_unregister(void);
-void   mt_test_reset_faults(void);
-int    mt_test_run_until_blocked(void);
-void  *mt_test_current_stack_base(void);
-size_t mt_test_current_stack_size(void);
-size_t mt_test_current_stack_guard_size(void);
-void   mt_test_memory_counters(size_t *task_allocs,
-                               size_t *task_frees,
-                               size_t *stack_allocs,
-                               size_t *stack_frees,
-                               size_t *timer_allocs,
-                               size_t *timer_frees);
-void   mt_test_channel_memory_counters(size_t *channel_allocs,
-                                       size_t *channel_frees,
-                                       size_t *buffer_allocs,
-                                       size_t *buffer_frees);
-void   mt_test_handle_memory_counters(size_t *handle_allocs,
-                                      size_t *handle_frees);
-void   mt_test_select_memory_counters(size_t *select_allocs,
-                                      size_t *select_frees);
-void   mt_test_io_memory_counters(size_t *fd_waiter_allocs,
-                                  size_t *fd_waiter_frees,
-                                  size_t *backend_inits,
-                                  size_t *backend_shutdowns,
-                                  size_t *backend_registers,
-                                  size_t *backend_unregisters);
-#endif
+/* Test-only fault hooks are declared by <microthread_testing.h>. */
 
 #ifdef __cplusplus
 }

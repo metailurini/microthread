@@ -6,15 +6,11 @@ FORCE_POLL_CPPFLAGS := $(CPPFLAGS) -DMT_FORCE_POLL_BACKEND
 SAN_CFLAGS := -std=c11 -fsanitize=address,undefined -g -O1
 TSAN_CFLAGS := -std=c11 -fsanitize=thread -g -O1
 
-SRC := src/microthread.c src/status.c
+SRC := src/microthread.c src/status.c src/io.c src/io_backend.c src/io_backend_poll.c src/io_backend_epoll.c src/io_backend_kqueue.c
 ASM_SRC :=
 INTERNAL_SRC := \
-	src/io.c \
-	src/io_backend.c \
+	src/runtime_internal.h \
 	src/io_backend.h \
-	src/io_backend_poll.c \
-	src/io_backend_epoll.c \
-	src/io_backend_kqueue.c \
 	src/status_internal.h
 
 ifeq ($(OS),Windows_NT)
@@ -43,14 +39,14 @@ LIB := $(BUILD_DIR)/libmicrothread.a
 OBJ := $(SRC:%.c=$(BUILD_DIR)/%.o) $(ASM_SRC:%.S=$(BUILD_DIR)/%.o)
 DIRECT_DEPS := $(SRC) $(ASM_SRC) $(INTERNAL_SRC)
 
-POLL_OBJ := $(BUILD_DIR)/src/microthread_poll.o $(BUILD_DIR)/src/status_poll.o
+POLL_OBJ := $(BUILD_DIR)/src/microthread_poll.o $(BUILD_DIR)/src/status_poll.o $(BUILD_DIR)/src/io_poll.o $(BUILD_DIR)/src/io_backend_poll_main.o $(BUILD_DIR)/src/io_backend_poll_backend.o $(BUILD_DIR)/src/io_backend_epoll_poll.o $(BUILD_DIR)/src/io_backend_kqueue_poll.o
 ifeq ($(UNAME_S),Darwin)
 POLL_OBJ += $(BUILD_DIR)/src/context_asm_poll.o $(BUILD_DIR)/src/context_asm_macos_poll.o
 else ifneq ($(OS),Windows_NT)
 POLL_OBJ += $(BUILD_DIR)/src/context_ucontext_poll.o
 endif
 
-FAST_TESTS := test_v0_1 test_v0_2 test_v0_3 test_v0_4 test_v0_5 test_v0_6 test_v0_7 test_v0_7_poll test_public_api test_public_io test_guard_disabled
+FAST_TESTS := test_v0_1 test_v0_2 test_v0_3 test_v0_4 test_v0_5 test_v0_6 test_v0_7 test_v0_7_poll test_public_api test_public_io test_public_runtime test_guard_disabled
 STRESS_TESTS := test_v0_1_full test_v0_2_full test_v0_3_full test_v0_4_full
 IO_STRESS_TESTS := test_v0_7_full test_v0_7_poll_full
 SAN_TESTS := test_v0_1_asan test_v0_2_asan test_v0_3_asan test_v0_4_asan test_v0_5_asan test_v0_6_asan test_v0_7_asan test_v0_7_poll_asan
@@ -140,6 +136,7 @@ $(eval $(call DIRECT_TEST,test_guard_disabled,test_guard_disabled,-DMT_DISABLE_G
 $(eval $(call DIRECT_TEST,test_v0_4_guard_disabled,test_v0_4,-DMT_DISABLE_GUARD_PAGES))
 $(eval $(call PUBLIC_TEST,test_public_api,test_public_api))
 $(eval $(call PUBLIC_TEST,test_public_io,test_public_io))
+$(eval $(call PUBLIC_TEST,test_public_runtime,test_public_runtime))
 $(foreach e,$(EXAMPLES),$(eval $(call EXAMPLE_TEMPLATE,$(e))))
 $(eval $(call EXAMPLE_TEMPLATE,echo_server))
 
@@ -147,6 +144,11 @@ $(BUILD_DIR)/libmicrothread_poll.a: $(DIRECT_DEPS)
 	@mkdir -p $(dir $@) $(BUILD_DIR)/src
 	$(CC) $(FORCE_POLL_CPPFLAGS) $(CFLAGS) -c src/microthread.c -o $(BUILD_DIR)/src/microthread_poll.o
 	$(CC) $(FORCE_POLL_CPPFLAGS) $(CFLAGS) -c src/status.c -o $(BUILD_DIR)/src/status_poll.o
+	$(CC) $(FORCE_POLL_CPPFLAGS) $(CFLAGS) -c src/io.c -o $(BUILD_DIR)/src/io_poll.o
+	$(CC) $(FORCE_POLL_CPPFLAGS) $(CFLAGS) -c src/io_backend.c -o $(BUILD_DIR)/src/io_backend_poll_main.o
+	$(CC) $(FORCE_POLL_CPPFLAGS) $(CFLAGS) -c src/io_backend_poll.c -o $(BUILD_DIR)/src/io_backend_poll_backend.o
+	$(CC) $(FORCE_POLL_CPPFLAGS) $(CFLAGS) -c src/io_backend_epoll.c -o $(BUILD_DIR)/src/io_backend_epoll_poll.o
+	$(CC) $(FORCE_POLL_CPPFLAGS) $(CFLAGS) -c src/io_backend_kqueue.c -o $(BUILD_DIR)/src/io_backend_kqueue_poll.o
 	@if [ -n "$(ASM_SRC)" ]; then \
 		$(CC) $(FORCE_POLL_CPPFLAGS) $(CFLAGS) -c $(ASM_SRC) -o $(BUILD_DIR)/src/context_asm_macos_poll.o; \
 	fi

@@ -1,26 +1,12 @@
-/* Internal I/O backend and fd-waiter implementation.
- *
- * This file is intentionally included by src/microthread.c so it can share the
- * private runtime structs while keeping backend code out of the main scheduler
- * file.  The includes below make standalone IDE parsing clean; the body is only
- * compiled when embedded by the runtime.
- */
+/* Internal I/O backend and fd-waiter implementation. */
 
-#ifdef MICROTHREAD_EMBEDDED_IMPL
-
-#include "status_internal.h"
+#include "runtime_internal.h"
+#include "io_backend.h"
 
 #if !defined(_WIN32)
-#define MT_IO_WAKE_SENTINEL (-1)
+void mt_io_drain_wake_pipe(void);
 
-static mt_fd_waiter_t *mt_fd_find_waiter(int fd, int ready_events);
-static void mt_io_drain_wake_pipe(void);
-
-#include "io_backend_poll.c"
-#include "io_backend_epoll.c"
-#include "io_backend_kqueue.c"
-
-static uint64_t mt_fd_generation_current(int fd) {
+uint64_t mt_fd_generation_current(int fd) {
     for (mt_fd_generation_t *g = g_rt.fd_generations; g; g = g->next) {
         if (g->fd == fd) {
             return g->generation;
@@ -32,12 +18,13 @@ static uint64_t mt_fd_generation_current(int fd) {
     }
     g->fd = fd;
     g->generation = 1;
+    g->original_flags = -1;
     g->next = g_rt.fd_generations;
     g_rt.fd_generations = g;
     return g->generation;
 }
 
-static mt_fd_generation_t *mt_fd_generation_find(int fd) {
+mt_fd_generation_t *mt_fd_generation_find(int fd) {
     for (mt_fd_generation_t *g = g_rt.fd_generations; g; g = g->next) {
         if (g->fd == fd) {
             return g;
@@ -46,12 +33,12 @@ static mt_fd_generation_t *mt_fd_generation_find(int fd) {
     return NULL;
 }
 
-static int mt_fd_is_closing(int fd) {
+int mt_fd_is_closing(int fd) {
     mt_fd_generation_t *g = mt_fd_generation_find(fd);
     return g && g->closing;
 }
 
-static int mt_fd_set_closing(int fd, int closing) {
+int mt_fd_set_closing(int fd, int closing) {
     mt_fd_generation_t *g = mt_fd_generation_find(fd);
     if (!g) {
         g = (mt_fd_generation_t *)calloc(1, sizeof(*g));
@@ -67,7 +54,7 @@ static int mt_fd_set_closing(int fd, int closing) {
     return MT_OK;
 }
 
-static void mt_fd_generation_bump(int fd) {
+void mt_fd_generation_bump(int fd) {
     for (mt_fd_generation_t *g = g_rt.fd_generations; g; g = g->next) {
         if (g->fd == fd) {
             g->generation++;
@@ -83,11 +70,12 @@ static void mt_fd_generation_bump(int fd) {
     }
     g->fd = fd;
     g->generation = 2;
+    g->original_flags = -1;
     g->next = g_rt.fd_generations;
     g_rt.fd_generations = g;
 }
 
-static int mt_fd_generation_remove(int fd) {
+int mt_fd_generation_remove(int fd) {
     mt_fd_generation_t **link = &g_rt.fd_generations;
     while (*link) {
         if ((*link)->fd == fd) {
@@ -101,7 +89,7 @@ static int mt_fd_generation_remove(int fd) {
     return 0;
 }
 
-static void mt_io_drain_wake_pipe(void) {
+void mt_io_drain_wake_pipe(void) {
     if (g_rt.io_wake_read_fd < 0) {
         return;
     }
@@ -121,7 +109,7 @@ static void mt_io_drain_wake_pipe(void) {
     }
 }
 
-static void mt_io_backend_wake(void) {
+void mt_io_backend_wake(void) {
     if (g_rt.io_wake_write_fd < 0) {
         return;
     }
@@ -153,7 +141,7 @@ static int mt_io_make_wake_pipe(void) {
     return MT_OK;
 }
 
-static int mt_io_backend_init(void) {
+int mt_io_backend_init(void) {
 #ifdef MT_TESTING
     if (g_fail_next_io_backend_init) {
         g_fail_next_io_backend_init = 0;
@@ -187,7 +175,7 @@ static int mt_io_backend_init(void) {
     return MT_OK;
 }
 
-static void mt_io_backend_shutdown(void) {
+void mt_io_backend_shutdown(void) {
 #ifdef MT_TESTING
     if (g_rt.io_backend_kind != MT_IO_BACKEND_NONE || g_rt.io_backend_fd >= 0 ||
         g_rt.io_wake_read_fd >= 0 || g_rt.io_wake_write_fd >= 0) {
@@ -217,7 +205,7 @@ static void mt_io_backend_shutdown(void) {
     g_rt.io_polling = 0;
 }
 
-static const char *mt_io_backend_name_locked(void) {
+const char *mt_io_backend_name_locked(void) {
     switch (g_rt.io_backend_kind) {
         case MT_IO_BACKEND_EPOLL:
             return "epoll";
@@ -231,7 +219,7 @@ static const char *mt_io_backend_name_locked(void) {
     }
 }
 
-static int mt_io_backend_add(mt_fd_waiter_t *waiter) {
+int mt_io_backend_add(mt_fd_waiter_t *waiter) {
     if (!waiter) {
         return MT_ERR_INVALID;
     }
@@ -261,7 +249,7 @@ static int mt_io_backend_add(mt_fd_waiter_t *waiter) {
     return rc;
 }
 
-static void mt_io_backend_remove(mt_fd_waiter_t *waiter) {
+void mt_io_backend_remove(mt_fd_waiter_t *waiter) {
     if (!waiter) {
         return;
     }
@@ -288,7 +276,7 @@ static void mt_io_backend_remove(mt_fd_waiter_t *waiter) {
 #endif
 }
 
-static mt_fd_waiter_t *mt_fd_find_waiter(int fd, int ready_events) {
+mt_fd_waiter_t *mt_fd_find_waiter(int fd, int ready_events) {
     for (mt_fd_waiter_t *w = g_rt.fd_waiters; w; w = w->next) {
         if (w->active && w->fd == fd && (w->events & ready_events) != 0) {
             if (w->generation == mt_fd_generation_current(fd)) {
@@ -301,17 +289,26 @@ static mt_fd_waiter_t *mt_fd_find_waiter(int fd, int ready_events) {
     return NULL;
 }
 
-static int mt_fd_waiter_conflicts(int fd, int events) {
-    (void)events;
+int mt_fd_active_events_for_fd(int fd, mt_fd_waiter_t *exclude, int extra_events) {
+    int active = extra_events;
     for (mt_fd_waiter_t *w = g_rt.fd_waiters; w; w = w->next) {
-        if (w->active && w->fd == fd) {
+        if (w != exclude && w->active && w->fd == fd) {
+            active |= w->events;
+        }
+    }
+    return active;
+}
+
+int mt_fd_waiter_conflicts(int fd, int events) {
+    for (mt_fd_waiter_t *w = g_rt.fd_waiters; w; w = w->next) {
+        if (w->active && w->fd == fd && (w->events & events) != 0) {
             return 1;
         }
     }
     return 0;
 }
 
-static int mt_fd_waiter_add(mt_fd_waiter_t *waiter) {
+int mt_fd_waiter_add(mt_fd_waiter_t *waiter) {
     int rc = mt_io_backend_add(waiter);
     if (rc != MT_OK) {
         return rc;
@@ -324,7 +321,7 @@ static int mt_fd_waiter_add(mt_fd_waiter_t *waiter) {
     return MT_OK;
 }
 
-static int mt_fd_waiter_remove(mt_fd_waiter_t *waiter) {
+int mt_fd_waiter_remove(mt_fd_waiter_t *waiter) {
     if (!waiter || !waiter->active) {
         return 0;
     }
@@ -347,11 +344,11 @@ static int mt_fd_waiter_remove(mt_fd_waiter_t *waiter) {
     return 0;
 }
 
-static void mt_fd_free_waiter(mt_fd_waiter_t *waiter) {
+void mt_fd_free_waiter(mt_fd_waiter_t *waiter) {
     mt_free_fd_waiter(waiter);
 }
 
-static void mt_fd_ready_waiter(mt_fd_waiter_t *waiter, int result, int ready_events) {
+void mt_fd_ready_waiter(mt_fd_waiter_t *waiter, int result, int ready_events) {
     if (!waiter || !waiter->task) {
         return;
     }
@@ -369,7 +366,7 @@ static void mt_fd_ready_waiter(mt_fd_waiter_t *waiter, int result, int ready_eve
     }
 }
 
-static void mt_fd_timeout_ready(mt_task_t *task) {
+void mt_fd_timeout_ready(mt_task_t *task) {
     if (!task) {
         return;
     }
@@ -403,7 +400,7 @@ static void mt_backend_fd_waiters_locked(int timeout_ms) {
 #endif
 }
 
-static void mt_poll_fd_waiters_with_timeout(int timeout_ms) {
+void mt_poll_fd_waiters_with_timeout(int timeout_ms) {
     if (g_rt.fd_waiting_count == 0 && g_rt.io_wake_read_fd < 0) {
         return;
     }
@@ -423,14 +420,14 @@ static void mt_poll_fd_waiters_with_timeout(int timeout_ms) {
     mt_notify_all();
 }
 
-static void mt_poll_fd_waiters_once(uint64_t now_ns) {
+void mt_poll_fd_waiters_once(uint64_t now_ns) {
     (void)now_ns;
     if (g_rt.fd_waiting_count > 0) {
         mt_poll_fd_waiters_with_timeout(0);
     }
 }
 
-static void mt_fd_wake_all(int result) {
+void mt_fd_wake_all(int result) {
     mt_fd_waiter_t *w = g_rt.fd_waiters;
     while (w) {
         mt_fd_waiter_t *next = w->next;
@@ -441,7 +438,7 @@ static void mt_fd_wake_all(int result) {
     }
 }
 
-static void mt_fd_wake_for_close(int fd) {
+void mt_fd_wake_for_close(int fd) {
     mt_fd_generation_bump(fd);
     mt_fd_waiter_t *w = g_rt.fd_waiters;
     while (w) {
@@ -453,36 +450,36 @@ static void mt_fd_wake_for_close(int fd) {
     }
 }
 #else
-static void mt_io_backend_wake(void) {
+void mt_io_backend_wake(void) {
 }
 
-static int mt_io_backend_init(void) {
+int mt_io_backend_init(void) {
     return MT_OK;
 }
 
-static void mt_io_backend_shutdown(void) {
+void mt_io_backend_shutdown(void) {
 }
 
-static const char *mt_io_backend_name_locked(void) {
+const char *mt_io_backend_name_locked(void) {
     return "unsupported";
 }
 
-static void mt_fd_timeout_ready(mt_task_t *task) {
+void mt_fd_timeout_ready(mt_task_t *task) {
     if (task) {
         task->state = MT_TASK_READY;
         mt_runq_push(task);
     }
 }
 
-static void mt_poll_fd_waiters_once(uint64_t now_ns) {
+void mt_poll_fd_waiters_once(uint64_t now_ns) {
     (void)now_ns;
 }
 
-static void mt_poll_fd_waiters_with_timeout(int timeout_ms) {
+void mt_poll_fd_waiters_with_timeout(int timeout_ms) {
     (void)timeout_ms;
 }
 
-static void mt_fd_wake_all(int result) {
+void mt_fd_wake_all(int result) {
     mt_fd_waiter_t *w = g_rt.fd_waiters;
     while (w) {
         mt_fd_waiter_t *next = w->next;
@@ -493,9 +490,8 @@ static void mt_fd_wake_all(int result) {
     }
 }
 
-static void mt_fd_wake_for_close(int fd) {
+void mt_fd_wake_for_close(int fd) {
     (void)fd;
 }
 #endif
 
-#endif /* MICROTHREAD_EMBEDDED_IMPL */

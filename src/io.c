@@ -1,15 +1,7 @@
-/* Internal fd/socket public API implementation.
- *
- * This file is intentionally included by src/microthread.c instead of compiled
- * as a standalone translation unit.  Keep the public includes here so IDEs and
- * language servers can parse the file without relying on src/microthread.c's
- * include order; compile the implementation body only when embedded by the
- * runtime.
- */
+/* Internal fd/socket public API implementation. */
 
-#ifdef MICROTHREAD_EMBEDDED_IMPL
-
-#include "status_internal.h"
+#include "runtime_internal.h"
+#include "io_backend.h"
 
 #if !defined(_WIN32)
 static int mt_fd_validate_events(int events) {
@@ -66,9 +58,15 @@ int mt_fd_set_nonblocking(int fd) {
 }
 
 int mt_fd_adopt(int fd) {
-    int rc = mt_fd_set_nonblocking(fd);
-    if (rc != MT_OK) {
-        return rc;
+    if (fd < 0) {
+        return MT_ERR_INVALID;
+    }
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return mt_io_error_from_errno(1);
+    }
+    if ((flags & O_NONBLOCK) == 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+        return mt_io_error_from_errno(1);
     }
     mt_lock();
     if (mt_fd_is_closing(fd)) {
@@ -76,21 +74,38 @@ int mt_fd_adopt(int fd) {
         return MT_ERR_CLOSED;
     }
     uint64_t gen = mt_fd_generation_current(fd);
+    if (gen == 0) {
+        mt_unlock();
+        return MT_ERR_NOMEM;
+    }
+    mt_fd_generation_t *entry = mt_fd_generation_find(fd);
+    if (entry && !entry->adopted) {
+        entry->adopted = 1;
+        entry->original_flags = flags;
+    }
     mt_unlock();
-    return gen == 0 ? MT_ERR_NOMEM : MT_OK;
+    return MT_OK;
 }
 
 int mt_fd_release(int fd) {
     if (fd < 0) {
         return MT_ERR_INVALID;
     }
+    int restore_flags = -1;
     mt_lock();
     if (mt_fd_is_closing(fd) || mt_fd_waiter_conflicts(fd, MT_FD_READ | MT_FD_WRITE)) {
         mt_unlock();
         return MT_ERR_STATE;
     }
+    mt_fd_generation_t *entry = mt_fd_generation_find(fd);
+    if (entry && entry->adopted) {
+        restore_flags = entry->original_flags;
+    }
     (void)mt_fd_generation_remove(fd);
     mt_unlock();
+    if (restore_flags >= 0 && fcntl(fd, F_SETFL, restore_flags) != 0) {
+        return mt_io_error_from_errno(1);
+    }
     return MT_OK;
 }
 
@@ -509,4 +524,3 @@ int mt_net_close(int fd) {
 }
 #endif
 
-#endif /* MICROTHREAD_EMBEDDED_IMPL */

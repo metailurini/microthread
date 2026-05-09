@@ -154,7 +154,7 @@ For `mt_fd_read()` / `mt_fd_write()`:
   prepares descriptor-generation metadata for MicroThread I/O.
 - **TC-FD-NONBLOCK-003B**: `mt_fd_release(fd)` removes MicroThread descriptor
   metadata without closing the descriptor, rejects release while a waiter is active,
-  and documents that it does not restore the descriptor's previous blocking flags.
+  and restores the descriptor flags captured when the fd was first adopted when possible.
 - **TC-FD-NONBLOCK-004**: fd wait APIs reject negative descriptors.
 - **TC-FD-NONBLOCK-005**: fd wait APIs reject unsupported event masks.
 - **TC-FD-NONBLOCK-006**: fd wait APIs validate null output pointers where output
@@ -180,8 +180,7 @@ For `mt_fd_read()` / `mt_fd_write()`:
   microthread waits for read.
 - **TC-FD-READ-005**: peer close wakes a read waiter and reports EOF/closed using
   documented semantics.
-- **TC-FD-READ-006**: multiple read waiters on the same fd are rejected or handled
-  according to a documented policy.
+- **TC-FD-READ-006**: multiple read waiters on the same fd are rejected according to the documented one-read-waiter policy.
 - **TC-FD-READ-007**: readiness is not lost if the peer writes just before the
   waiter registers.
 - **TC-FD-READ-008**: readiness is not lost if the peer writes concurrently with
@@ -192,6 +191,8 @@ For `mt_fd_read()` / `mt_fd_write()`:
 - **TC-FD-READ-012**: read wait can be cancelled safely.
 
 ## 5. Write Readiness Waits
+
+- **TC-FD-RW-000**: one read waiter and one write waiter may coexist on the same fd; duplicate read/write waiters or overlapping combined waits still return `MT_ERR_STATE`.
 
 - **TC-FD-WRITE-001**: waiting for write on a writable socket returns ready
   immediately.
@@ -360,7 +361,7 @@ For `mt_fd_read()` / `mt_fd_write()`:
 ### Linux epoll
 
 - **TC-IO-EPOLL-001**: epoll backend is selected on Linux when available.
-- **TC-IO-EPOLL-002**: epoll add/modify/delete paths work for read waiters.
+- **TC-IO-EPOLL-002**: epoll add/modify/delete paths work for read waiters, write waiters, and a coexisting read+write waiter pair on one fd.
 - **TC-IO-EPOLL-003**: epoll add/modify/delete paths work for write waiters.
 - **TC-IO-EPOLL-004**: `EPOLLERR` and `EPOLLHUP` wake waiters.
 - **TC-IO-EPOLL-005**: eventfd/pipe wakeup mechanism interrupts epoll wait during

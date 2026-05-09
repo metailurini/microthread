@@ -1,9 +1,8 @@
-#include "microthread.h"
+#include "runtime_internal.h"
 #include "io_backend.h"
 
-#ifdef MICROTHREAD_EMBEDDED_IMPL
 
-static short mt_fd_events_to_poll(int events) {
+short mt_fd_events_to_poll(int events) {
     short pevents = 0;
     if (events & MT_FD_READ) {
         pevents |= POLLIN;
@@ -15,7 +14,7 @@ static short mt_fd_events_to_poll(int events) {
 }
 
 
-static int mt_poll_revents_to_fd_events(short revents) {
+int mt_poll_revents_to_fd_events(short revents) {
     int events = 0;
     if (revents & (POLLIN | POLLHUP | POLLERR)) {
         events |= MT_FD_READ;
@@ -26,7 +25,7 @@ static int mt_poll_revents_to_fd_events(short revents) {
     return events;
 }
 
-static void mt_poll_backend_wait_locked(int timeout_ms) {
+void mt_poll_backend_wait_locked(int timeout_ms) {
     size_t count = 1;
     for (mt_fd_waiter_t *w = g_rt.fd_waiters; w; w = w->next) {
         if (w->active) {
@@ -73,8 +72,8 @@ static void mt_poll_backend_wait_locked(int timeout_ms) {
                 continue;
             }
             if (pfds[i].revents & POLLNVAL) {
-                mt_fd_waiter_t *w = mt_fd_find_waiter(pfds[i].fd, MT_FD_READ | MT_FD_WRITE);
-                if (w) {
+                mt_fd_waiter_t *w;
+                while ((w = mt_fd_find_waiter(pfds[i].fd, MT_FD_READ | MT_FD_WRITE)) != NULL) {
                     mt_fd_ready_waiter(w, MT_ERR_INVALID, 0);
                 }
                 continue;
@@ -94,4 +93,3 @@ static void mt_poll_backend_wait_locked(int timeout_ms) {
     free(pfds);
 }
 
-#endif /* MICROTHREAD_EMBEDDED_IMPL */

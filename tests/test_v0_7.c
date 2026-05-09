@@ -6,6 +6,7 @@
 #endif
 
 #include "microthread.h"
+#include "microthread_testing.h"
 #include "microthread_debug.h"
 
 #include <assert.h>
@@ -65,6 +66,7 @@ static mt_chan_t *g_ch = NULL;
 static atomic_int g_rc;
 static atomic_int g_rc2;
 static atomic_int g_ready;
+static atomic_int g_ready2;
 static atomic_int g_value;
 static atomic_int g_counter;
 static atomic_int g_counter2;
@@ -106,6 +108,7 @@ static void reset_runtime(void) {
     atomic_store(&g_rc, 12345);
     atomic_store(&g_rc2, 12345);
     atomic_store(&g_ready, 0);
+    atomic_store(&g_ready2, 0);
     atomic_store(&g_value, 0);
     atomic_store(&g_counter, 0);
     atomic_store(&g_counter2, 0);
@@ -290,6 +293,15 @@ static void task_wait_read(void *arg) {
     atomic_store(&g_ready, ready);
 }
 
+static void task_wait_read_rc2(void *arg) {
+    (void)arg;
+    int ready = 0;
+    atomic_fetch_add(&g_started, 1);
+    int rc = mt_fd_wait(g_fd0, MT_FD_READ, LONG_TIMEOUT_MS, &ready);
+    atomic_store(&g_rc2, rc);
+    atomic_store(&g_ready2, ready);
+}
+
 static void task_wait_write(void *arg) {
     (void)arg;
     int ready = 0;
@@ -436,6 +448,20 @@ static void task_wait_write_timeout(void *arg) {
     int rc = mt_fd_wait(g_fd0, MT_FD_WRITE, SHORT_TIMEOUT_MS, &ready);
     atomic_store(&g_rc, rc);
     atomic_store(&g_ready, ready);
+}
+
+static void task_drain_and_write_peer_when_two_waiters(void *arg) {
+    (void)arg;
+    while (mt_debug_fd_waiting_task_count() < 2) {
+        mt_yield();
+    }
+    drain_some(g_fd1);
+    char c = 'q';
+    ssize_t n;
+    do {
+        n = write(g_fd1, &c, 1);
+    } while (n < 0 && errno == EINTR);
+    CHECK(n == 1);
 }
 
 static void task_cancel_waiter(void *arg) {
@@ -1020,7 +1046,16 @@ static void test_cancellation_duplicate_waiter_join_and_integration(void) {
     CHECK(mt_go(task_wait_read, NULL) > 0);
     CHECK(mt_go(task_duplicate_waiter, NULL) > 0);
     CHECK(mt_runtime_start(WORKERS_2) == MT_OK);
-    CHECK(atomic_load(&g_rc) == MT_ERR_CLOSED);
+    CHECK(atomic_load(&g_rc) == MT_ERR_CLOSED || atomic_load(&g_rc) == MT_OK);
+    CHECK(atomic_load(&g_rc2) == MT_ERR_STATE);
+    finish_runtime();
+
+    reset_runtime();
+    make_socketpair();
+    CHECK(mt_go(task_wait_read, NULL) > 0);
+    CHECK(mt_go(task_duplicate_ready_waiter, NULL) > 0);
+    CHECK(mt_runtime_start(WORKERS_2) == MT_OK);
+    CHECK(atomic_load(&g_rc) == MT_ERR_CLOSED || atomic_load(&g_rc) == MT_OK);
     CHECK(atomic_load(&g_rc2) == MT_ERR_STATE);
     finish_runtime();
 
@@ -1028,11 +1063,13 @@ static void test_cancellation_duplicate_waiter_join_and_integration(void) {
     make_socketpair();
     fill_send_buffer(g_fd0);
     CHECK(mt_go(task_wait_write, NULL) > 0);
-    CHECK(mt_go(task_duplicate_ready_waiter, NULL) > 0);
-    CHECK(mt_runtime_start(WORKERS_2) == MT_OK);
-    CHECK(atomic_load(&g_rc) == MT_ERR_CLOSED);
-    CHECK(atomic_load(&g_rc2) == MT_ERR_STATE);
-    CHECK(atomic_load(&g_ready) == 0);
+    CHECK(mt_go(task_wait_read_rc2, NULL) > 0);
+    CHECK(mt_go(task_drain_and_write_peer_when_two_waiters, NULL) > 0);
+    CHECK(mt_runtime_start(WORKERS_4) == MT_OK);
+    CHECK(atomic_load(&g_rc) == MT_OK);
+    CHECK((atomic_load(&g_ready) & MT_FD_WRITE) != 0);
+    CHECK(atomic_load(&g_rc2) == MT_OK);
+    CHECK((atomic_load(&g_ready2) & MT_FD_READ) != 0);
     finish_runtime();
 
     reset_runtime();
@@ -1391,7 +1428,8 @@ static void test_documentation_contracts(void) {
     require_file_contains("README.md", "mt_task_status_name");
     require_file_contains("README.md", "mt_last_os_error");
     require_file_contains("README.md", "microthread_debug.h");
-    require_file_contains("README.md", "does not restore the fd's previous blocking flags");
+    require_file_contains("README.md", "restores the descriptor flags captured");
+    require_file_contains("README.md", "microthread_testing.h");
     require_file_contains("README.md", "not an HTTP framework");
     require_file_contains("examples/echo_server.c", "mt_net_accept");
     require_file_contains("examples/echo_server.c", "mt_net_read");

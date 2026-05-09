@@ -1,10 +1,9 @@
-#include "microthread.h"
+#include "runtime_internal.h"
 #include "io_backend.h"
 
-#ifdef MICROTHREAD_EMBEDDED_IMPL
 
 #if defined(MT_HAVE_KQUEUE)
-static int mt_kqueue_backend_init(void) {
+int mt_kqueue_backend_init(void) {
     g_rt.io_backend_fd = kqueue();
     if (g_rt.io_backend_fd < 0) {
         mt_set_last_os_error(errno);
@@ -20,7 +19,7 @@ static int mt_kqueue_backend_init(void) {
     return MT_OK;
 }
 
-static int mt_kqueue_backend_add(mt_fd_waiter_t *waiter) {
+int mt_kqueue_backend_add(mt_fd_waiter_t *waiter) {
     struct kevent evs[2];
     int n = 0;
     if (waiter->events & MT_FD_READ) {
@@ -36,7 +35,7 @@ static int mt_kqueue_backend_add(mt_fd_waiter_t *waiter) {
     return MT_OK;
 }
 
-static void mt_kqueue_backend_remove(mt_fd_waiter_t *waiter) {
+void mt_kqueue_backend_remove(mt_fd_waiter_t *waiter) {
     struct kevent evs[2];
     int n = 0;
     if (waiter->events & MT_FD_READ) {
@@ -50,7 +49,7 @@ static void mt_kqueue_backend_remove(mt_fd_waiter_t *waiter) {
     }
 }
 
-static void mt_kqueue_backend_wait_locked(int timeout_ms) {
+void mt_kqueue_backend_wait_locked(int timeout_ms) {
     struct kevent events[64];
     struct timespec ts;
     struct timespec *tsp = NULL;
@@ -98,4 +97,3 @@ static void mt_kqueue_backend_wait_locked(int timeout_ms) {
 }
 #endif
 
-#endif /* MICROTHREAD_EMBEDDED_IMPL */
