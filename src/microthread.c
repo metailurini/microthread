@@ -114,6 +114,7 @@ typedef struct mt_task {
 typedef struct mt_fd_generation {
     int fd;
     uint64_t generation;
+    int closing;
     struct mt_fd_generation *next;
 } mt_fd_generation_t;
 
@@ -1266,10 +1267,10 @@ static short mt_fd_events_to_poll(int events) {
 
 static int mt_poll_revents_to_fd_events(short revents) {
     int events = 0;
-    if (revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) {
+    if (revents & (POLLIN | POLLHUP | POLLERR)) {
         events |= MT_FD_READ;
     }
-    if (revents & (POLLOUT | POLLHUP | POLLERR | POLLNVAL)) {
+    if (revents & (POLLOUT | POLLHUP | POLLERR)) {
         events |= MT_FD_WRITE;
     }
     return events;
@@ -1303,6 +1304,36 @@ static uint64_t mt_fd_generation_current(int fd) {
     g->next = g_rt.fd_generations;
     g_rt.fd_generations = g;
     return g->generation;
+}
+
+static mt_fd_generation_t *mt_fd_generation_find(int fd) {
+    for (mt_fd_generation_t *g = g_rt.fd_generations; g; g = g->next) {
+        if (g->fd == fd) {
+            return g;
+        }
+    }
+    return NULL;
+}
+
+static int mt_fd_is_closing(int fd) {
+    mt_fd_generation_t *g = mt_fd_generation_find(fd);
+    return g && g->closing;
+}
+
+static int mt_fd_set_closing(int fd, int closing) {
+    mt_fd_generation_t *g = mt_fd_generation_find(fd);
+    if (!g) {
+        g = (mt_fd_generation_t *)calloc(1, sizeof(*g));
+        if (!g) {
+            return MT_ERR_NOMEM;
+        }
+        g->fd = fd;
+        g->generation = 1;
+        g->next = g_rt.fd_generations;
+        g_rt.fd_generations = g;
+    }
+    g->closing = closing;
+    return MT_OK;
 }
 
 static void mt_fd_generation_bump(int fd) {
@@ -1700,13 +1731,20 @@ static void mt_poll_fd_waiters_locked(int timeout_ms) {
                 mt_io_drain_wake_pipe();
                 continue;
             }
+            if (pfds[i].revents & POLLNVAL) {
+                mt_fd_waiter_t *w = mt_fd_find_waiter(pfds[i].fd, MT_FD_READ | MT_FD_WRITE);
+                if (w) {
+                    mt_fd_ready_waiter(w, MT_ERR_INVALID, 0);
+                }
+                continue;
+            }
             int ready_events = mt_poll_revents_to_fd_events(pfds[i].revents);
             mt_fd_waiter_t *w = mt_fd_find_waiter(pfds[i].fd, ready_events);
             if (!w) {
                 continue;
             }
             ready_events &= w->events;
-            if (ready_events == 0 && (pfds[i].revents & (POLLERR | POLLHUP | POLLNVAL))) {
+            if (ready_events == 0 && (pfds[i].revents & (POLLERR | POLLHUP))) {
                 ready_events = w->events;
             }
             mt_fd_ready_waiter(w, MT_OK, ready_events);
@@ -1919,8 +1957,8 @@ static mt_task_status_t mt_status_from_task(const mt_task_t *task) {
         case MT_TASK_RUNNING: return MT_TASK_STATUS_RUNNING;
         case MT_TASK_SLEEPING: return MT_TASK_STATUS_SLEEPING;
         case MT_TASK_WAITING_CHAN: return MT_TASK_STATUS_WAITING_CHAN;
-        case MT_TASK_WAITING_SELECT: return MT_TASK_STATUS_WAITING_CHAN;
-        case MT_TASK_WAITING_FD: return MT_TASK_STATUS_WAITING_CHAN;
+        case MT_TASK_WAITING_SELECT: return MT_TASK_STATUS_WAITING_SELECT;
+        case MT_TASK_WAITING_FD: return MT_TASK_STATUS_WAITING_FD;
         case MT_TASK_WAITING_JOIN: return MT_TASK_STATUS_WAITING_JOIN;
         case MT_TASK_DEAD: return MT_TASK_STATUS_DONE;
     }
@@ -2247,13 +2285,13 @@ static void mt_task_after_switch(mt_task_t *task) {
         if (task->handle && !task->handle->completed) {
             task->handle->status = task->handle->cancel_requested
                 ? MT_TASK_STATUS_CANCELLED
-                : MT_TASK_STATUS_WAITING_CHAN;
+                : MT_TASK_STATUS_WAITING_SELECT;
         }
     } else if (task->state == MT_TASK_WAITING_FD) {
         if (task->handle && !task->handle->completed) {
             task->handle->status = task->handle->cancel_requested
                 ? MT_TASK_STATUS_CANCELLED
-                : MT_TASK_STATUS_WAITING_CHAN;
+                : MT_TASK_STATUS_WAITING_FD;
         }
     } else if (task->state == MT_TASK_WAITING_JOIN) {
         if (task->handle && !task->handle->completed) {
@@ -3245,6 +3283,16 @@ int mt_fd_wait(int fd, int events, uint64_t timeout_ms, int *ready_events) {
         return MT_ERR_STATE;
     }
 
+    mt_lock();
+    if (mt_fd_is_closing(fd)) {
+        mt_unlock();
+        return MT_ERR_CLOSED;
+    }
+    if (mt_fd_waiter_conflicts(fd, events)) {
+        mt_unlock();
+        return MT_ERR_STATE;
+    }
+
     struct pollfd pfd;
     pfd.fd = fd;
     pfd.events = mt_fd_events_to_poll(events) | POLLERR | POLLHUP;
@@ -3254,24 +3302,26 @@ int mt_fd_wait(int fd, int events, uint64_t timeout_ms, int *ready_events) {
         nready = poll(&pfd, 1, 0);
     } while (nready < 0 && errno == EINTR);
     if (nready < 0) {
+        mt_unlock();
         return errno == EBADF ? MT_ERR_INVALID : MT_ERR;
     }
     if (nready > 0) {
         *ready_events = mt_poll_revents_to_fd_events(pfd.revents) & events;
-        if (*ready_events == 0 && (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+        if (pfd.revents & POLLNVAL) {
+            mt_unlock();
+            return MT_ERR_INVALID;
+        }
+        if (*ready_events == 0 && (pfd.revents & (POLLERR | POLLHUP))) {
             *ready_events = events;
         }
+        mt_unlock();
         return MT_OK;
     }
     if (timeout_ms == 0) {
+        mt_unlock();
         return MT_ERR_TIMEOUT;
     }
 
-    mt_lock();
-    if (mt_fd_waiter_conflicts(fd, events)) {
-        mt_unlock();
-        return MT_ERR_STATE;
-    }
     mt_fd_waiter_t *waiter = mt_alloc_fd_waiter();
     if (!waiter) {
         mt_unlock();
@@ -3332,6 +3382,10 @@ ssize_t mt_fd_read(int fd, void *buf, size_t len, uint64_t timeout_ms) {
     if (len == 0) {
         return 0;
     }
+    int nb_rc = mt_fd_set_nonblocking(fd);
+    if (nb_rc != MT_OK) {
+        return nb_rc;
+    }
     uint64_t deadline_ns = mt_deadline_from_timeout(timeout_ms);
     for (;;) {
         ssize_t n = read(fd, buf, len);
@@ -3358,6 +3412,10 @@ ssize_t mt_fd_write(int fd, const void *buf, size_t len, uint64_t timeout_ms) {
     }
     if (len == 0) {
         return 0;
+    }
+    int nb_rc = mt_fd_set_nonblocking(fd);
+    if (nb_rc != MT_OK) {
+        return nb_rc;
     }
     uint64_t deadline_ns = mt_deadline_from_timeout(timeout_ms);
     const unsigned char *p = (const unsigned char *)buf;
@@ -3391,9 +3449,21 @@ int mt_fd_close(int fd) {
         return MT_ERR_INVALID;
     }
     mt_lock();
+    if (mt_fd_is_closing(fd)) {
+        mt_unlock();
+        return MT_ERR_STATE;
+    }
+    if (mt_fd_set_closing(fd, 1) != MT_OK) {
+        mt_unlock();
+        return MT_ERR_NOMEM;
+    }
     mt_fd_wake_for_close(fd);
     mt_unlock();
-    return close(fd) == 0 ? MT_OK : (errno == EBADF ? MT_ERR_INVALID : MT_ERR);
+    int rc = close(fd) == 0 ? MT_OK : (errno == EBADF ? MT_ERR_INVALID : MT_ERR);
+    mt_lock();
+    (void)mt_fd_set_closing(fd, 0);
+    mt_unlock();
+    return rc;
 }
 
 int mt_net_listen_tcp(const char *host, const char *port, int backlog) {
@@ -3437,6 +3507,10 @@ int mt_net_accept(int listen_fd, struct sockaddr *addr, socklen_t *addrlen,
     if (listen_fd < 0) {
         return MT_ERR_INVALID;
     }
+    int nb_rc = mt_fd_set_nonblocking(listen_fd);
+    if (nb_rc != MT_OK) {
+        return nb_rc;
+    }
     uint64_t deadline_ns = mt_deadline_from_timeout(timeout_ms);
     for (;;) {
         int fd = accept(listen_fd, addr, addrlen);
@@ -3471,6 +3545,10 @@ ssize_t mt_net_write(int fd, const void *buf, size_t len, uint64_t timeout_ms) {
     }
     if (len == 0) {
         return 0;
+    }
+    int nb_rc = mt_fd_set_nonblocking(fd);
+    if (nb_rc != MT_OK) {
+        return nb_rc;
     }
 #if defined(SO_NOSIGPIPE)
     int one = 1;

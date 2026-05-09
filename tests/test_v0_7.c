@@ -177,6 +177,13 @@ static void make_socketpair(void) {
     CHECK(mt_fd_set_nonblocking(g_fd1) == MT_OK);
 }
 
+static void make_blocking_socketpair(void) {
+    int fds[2] = { -1, -1 };
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    g_fd0 = fds[0];
+    g_fd1 = fds[1];
+}
+
 static void get_listener_port(int fd) {
     struct sockaddr_in sin;
     socklen_t len = sizeof(sin);
@@ -459,6 +466,40 @@ static void task_duplicate_waiter(void *arg) {
     atomic_store(&g_rc2, rc);
     CHECK(mt_fd_close(g_fd0) == MT_OK);
     g_fd0 = -1;
+}
+
+static void task_duplicate_ready_waiter(void *arg) {
+    (void)arg;
+    while (mt_debug_fd_waiting_task_count() == 0) {
+        mt_yield();
+    }
+    char c = 'r';
+    CHECK(write(g_fd1, &c, 1) == 1);
+    int ready = 0;
+    int rc = mt_fd_wait(g_fd0, MT_FD_READ, SHORT_TIMEOUT_MS, &ready);
+    atomic_store(&g_rc2, rc);
+    atomic_store(&g_ready, ready);
+    CHECK(mt_fd_close(g_fd0) == MT_OK);
+    g_fd0 = -1;
+}
+
+static void task_blocking_fd_read_timeout(void *arg) {
+    (void)arg;
+    char c = 0;
+    atomic_store(&g_started, 1);
+    ssize_t n = mt_fd_read(g_fd0, &c, 1, SHORT_TIMEOUT_MS);
+    atomic_store(&g_rc, (int)n);
+}
+
+static void task_close_race_waiter(void *arg) {
+    (void)arg;
+    while (mt_debug_fd_waiting_task_count() == 0) {
+        mt_yield();
+    }
+    mt_sleep_ms(5);
+    int ready = 0;
+    int rc = mt_fd_wait(g_fd0, MT_FD_READ, SHORT_TIMEOUT_MS, &ready);
+    atomic_store(&g_rc2, rc);
 }
 
 static void task_wait_read_then_joinable(void *arg) {
@@ -845,6 +886,19 @@ static void test_read_wait_wakeup_productivity_close_and_timeout(void) {
     CHECK(atomic_load(&g_rc) == MT_ERR_CLOSED);
     finish_runtime();
 
+    for (int i = 0; i < 32; ++i) {
+        reset_runtime();
+        make_socketpair();
+        CHECK(mt_go(task_wait_read, NULL) > 0);
+        CHECK(mt_go(task_close_waited_fd_after_sleep, NULL) > 0);
+        CHECK(mt_go(task_close_race_waiter, NULL) > 0);
+        CHECK(mt_runtime_start(WORKERS_4) == MT_OK);
+        CHECK(atomic_load(&g_rc) == MT_ERR_CLOSED);
+        CHECK(atomic_load(&g_rc2) != MT_ERR_TIMEOUT);
+        CHECK(atomic_load(&g_rc2) != MT_OK);
+        finish_runtime();
+    }
+
     assert_core_counters_balanced();
     assert_io_counters_balanced();
 }
@@ -912,6 +966,16 @@ static void test_fd_read_write_wrappers_and_large_transfer(void) {
     CHECK(atomic_load(&g_bytes) == LARGE_BYTES);
     finish_runtime();
 
+    reset_runtime();
+    make_blocking_socketpair();
+    CHECK(mt_go(task_blocking_fd_read_timeout, NULL) > 0);
+    CHECK(mt_go(task_busy_counter, NULL) > 0);
+    CHECK(mt_runtime_start(WORKERS_2) == MT_OK);
+    CHECK(atomic_load(&g_rc) == MT_ERR_TIMEOUT);
+    CHECK(atomic_load(&g_counter) > 0);
+    assert_fd_nonblocking(g_fd0);
+    finish_runtime();
+
     assert_core_counters_balanced();
     assert_io_counters_balanced();
 }
@@ -934,6 +998,37 @@ static void test_cancellation_duplicate_waiter_join_and_integration(void) {
     CHECK(mt_runtime_start(WORKERS_2) == MT_OK);
     CHECK(atomic_load(&g_rc) == MT_ERR_CLOSED);
     CHECK(atomic_load(&g_rc2) == MT_ERR_STATE);
+    finish_runtime();
+
+    reset_runtime();
+    make_socketpair();
+    fill_send_buffer(g_fd0);
+    CHECK(mt_go(task_wait_write, NULL) > 0);
+    CHECK(mt_go(task_duplicate_ready_waiter, NULL) > 0);
+    CHECK(mt_runtime_start(WORKERS_2) == MT_OK);
+    CHECK(atomic_load(&g_rc) == MT_ERR_CLOSED);
+    CHECK(atomic_load(&g_rc2) == MT_ERR_STATE);
+    CHECK(atomic_load(&g_ready) == 0);
+    finish_runtime();
+
+    reset_runtime();
+    make_socketpair();
+    g_handle = mt_go_handle(task_wait_read, NULL);
+    CHECK(g_handle != NULL);
+    size_t workers_for_status = WORKERS_1;
+    pthread_t status_rt;
+    CHECK(pthread_create(&status_rt, NULL, runtime_thread_main, &workers_for_status) == 0);
+    while (!atomic_load(&g_started) || mt_runtime_workers() == 0 ||
+           mt_debug_fd_waiting_task_count() == 0) {
+        sched_yield();
+    }
+    mt_task_status_t status = MT_TASK_STATUS_DONE;
+    CHECK(mt_task_status(g_handle, &status) == MT_OK);
+    CHECK(status == MT_TASK_STATUS_WAITING_FD);
+    CHECK(mt_fd_close(g_fd0) == MT_OK);
+    g_fd0 = -1;
+    CHECK(pthread_join(status_rt, NULL) == 0);
+    CHECK(atomic_load(&g_rc) == MT_ERR_CLOSED);
     finish_runtime();
 
     reset_runtime();

@@ -373,9 +373,10 @@ Current implementation notes:
 - Backend resources are initialized once with the runtime and cleaned up by `mt_shutdown()`.
 - `timeout_ms == 0` means a nonblocking readiness poll. The fd APIs use finite millisecond timeouts; pass a very large value when a practical indefinite wait is desired.
 - `MT_ERR_TIMEOUT`, `MT_ERR_CANCELLED`, `MT_ERR_CLOSED`, and `MT_ERR_INVALID` are distinct statuses.
+- `mt_fd_read()`, `mt_fd_write()`, and `mt_net_accept()` put their descriptor into nonblocking mode before attempting OS I/O, so accidentally passing a blocking descriptor does not park an OS worker forever.
 - `mt_fd_close(fd)` closes the descriptor and wakes MicroThread waiters for that fd.
 - `mt_net_write()` avoids `SIGPIPE` where the platform provides `MSG_NOSIGNAL` or `SO_NOSIGPIPE`; `mt_fd_write()` is the lower-level descriptor helper and may inherit normal platform `write()` behavior.
-- A single active waiter per descriptor is supported; overlapping waits on the same fd return `MT_ERR_STATE`.
+- A single active waiter per descriptor is supported; overlapping waits on the same fd return `MT_ERR_STATE`, including immediate-readiness fast paths.
 - Descriptor reuse is guarded for descriptors closed through `mt_fd_close(fd)`. Raw `close(fd)` while a microthread is waiting on the same fd is unsupported; use `mt_fd_close(fd)`.
 
 This is enough to build echo-server-style examples. Full HTTP parsing, routing, request limits, and production server behavior are intentionally separate future layers.
