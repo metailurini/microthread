@@ -301,11 +301,52 @@ int mt_fd_active_events_for_fd(int fd, mt_fd_waiter_t *exclude, int extra_events
 
 int mt_fd_waiter_conflicts(int fd, int events) {
     for (mt_fd_waiter_t *w = g_rt.fd_waiters; w; w = w->next) {
-        if (w->active && w->fd == fd && (w->events & events) != 0) {
+        if ((w->active || w->pending_ready) &&
+            w->fd == fd && (w->events & events) != 0) {
             return 1;
         }
     }
     return 0;
+}
+
+static int mt_fd_waiter_unlink(mt_fd_waiter_t *waiter) {
+    mt_fd_waiter_t **link = &g_rt.fd_waiters;
+    while (*link) {
+        if (*link == waiter) {
+            *link = waiter->next;
+            waiter->next = NULL;
+            return 1;
+        }
+        link = &(*link)->next;
+    }
+    return 0;
+}
+
+static int mt_fd_waiter_deactivate(mt_fd_waiter_t *waiter, int keep_conflict_reserved) {
+    if (!waiter) {
+        return 0;
+    }
+
+    int was_active = waiter->active;
+    if (waiter->active) {
+        waiter->active = 0;
+        mt_io_backend_remove(waiter);
+        if (g_rt.fd_waiting_count > 0) {
+            g_rt.fd_waiting_count--;
+        }
+    }
+
+    if (keep_conflict_reserved) {
+        waiter->pending_ready = 1;
+    } else {
+        waiter->pending_ready = 0;
+        mt_fd_waiter_unlink(waiter);
+    }
+
+    if (was_active || keep_conflict_reserved) {
+        mt_notify_all();
+    }
+    return was_active;
 }
 
 int mt_fd_waiter_add(mt_fd_waiter_t *waiter) {
@@ -314,6 +355,7 @@ int mt_fd_waiter_add(mt_fd_waiter_t *waiter) {
         return rc;
     }
     waiter->active = 1;
+    waiter->pending_ready = 0;
     waiter->next = g_rt.fd_waiters;
     g_rt.fd_waiters = waiter;
     g_rt.fd_waiting_count++;
@@ -322,29 +364,11 @@ int mt_fd_waiter_add(mt_fd_waiter_t *waiter) {
 }
 
 int mt_fd_waiter_remove(mt_fd_waiter_t *waiter) {
-    if (!waiter || !waiter->active) {
-        return 0;
-    }
-    mt_fd_waiter_t **link = &g_rt.fd_waiters;
-    while (*link) {
-        if (*link == waiter) {
-            *link = waiter->next;
-            waiter->next = NULL;
-            waiter->active = 0;
-            mt_io_backend_remove(waiter);
-            if (g_rt.fd_waiting_count > 0) {
-                g_rt.fd_waiting_count--;
-            }
-            mt_notify_all();
-            return 1;
-        }
-        link = &(*link)->next;
-    }
-    waiter->active = 0;
-    return 0;
+    return mt_fd_waiter_deactivate(waiter, 0);
 }
 
 void mt_fd_free_waiter(mt_fd_waiter_t *waiter) {
+    mt_fd_waiter_remove(waiter);
     mt_free_fd_waiter(waiter);
 }
 
@@ -353,7 +377,7 @@ void mt_fd_ready_waiter(mt_fd_waiter_t *waiter, int result, int ready_events) {
         return;
     }
     mt_task_t *task = waiter->task;
-    mt_fd_waiter_remove(waiter);
+    mt_fd_waiter_deactivate(waiter, 1);
     if (task->fd_in_timer) {
         mt_timer_remove(task);
         task->fd_in_timer = 0;
@@ -373,7 +397,7 @@ void mt_fd_timeout_ready(mt_task_t *task) {
     task->fd_in_timer = 0;
     mt_fd_waiter_t *waiter = task->fd_waiter;
     if (waiter) {
-        mt_fd_waiter_remove(waiter);
+        mt_fd_waiter_deactivate(waiter, 1);
     }
     task->fd_result = MT_ERR_TIMEOUT;
     task->fd_ready_events = 0;

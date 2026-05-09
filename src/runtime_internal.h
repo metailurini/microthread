@@ -152,6 +152,13 @@ struct mt_fd_waiter {
     uint64_t generation;
     int ready_events;
     int active;
+    /*
+     * A waiter remains reserved after the backend wakes it until the owning
+     * task resumes and consumes the result.  This keeps duplicate waiters for
+     * the same fd/event from slipping into the ready-but-not-yet-resumed
+     * window on threaded backends.
+     */
+    int pending_ready;
     mt_fd_waiter_t *next;
 };
 
