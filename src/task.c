@@ -159,10 +159,7 @@ int mt_join(mt_task_handle_t *handle) {
         return MT_ERR_STATE;
     }
 
-    task->join_waiting_on = handle;
-    task->join_result = MT_OK;
-    task->state = MT_TASK_WAITING_JOIN;
-    g_rt.join_waiting_count++;
+    mt_task_block_on_join(task, handle);
     mt_chan_waitq_push(&handle->join_head, &handle->join_tail, &handle->join_waiters, task);
     mt_ctx_switch(&task->ctx, mt_current_scheduler_ctx());
     return task->join_result;
@@ -180,7 +177,7 @@ static void mt_task_wake_for_cancel(mt_task_t *task) {
     switch (task->state) {
         case MT_TASK_READY:
             if (mt_runq_remove(task)) {
-                task->state = MT_TASK_DEAD;
+                mt_task_mark_dead(task);
                 if (g_rt.live_count > 0) {
                     g_rt.live_count--;
                 }
@@ -193,15 +190,12 @@ static void mt_task_wake_for_cancel(mt_task_t *task) {
             break;
         case MT_TASK_SLEEPING:
             if (mt_timer_remove(task)) {
-                task->state = MT_TASK_READY;
-                mt_runq_push(task);
+                mt_task_mark_ready(task);
             }
             break;
         case MT_TASK_WAITING_CHAN:
             if (mt_chan_remove_waiter(task)) {
-                task->chan_result = MT_ERR_CANCELLED;
-                task->state = MT_TASK_READY;
-                mt_runq_push(task);
+                mt_task_complete_channel_wait(task, MT_ERR_CANCELLED);
             }
             break;
         case MT_TASK_WAITING_SELECT:
@@ -214,9 +208,7 @@ static void mt_task_wake_for_cancel(mt_task_t *task) {
             break;
         case MT_TASK_WAITING_JOIN:
             if (mt_handle_remove_joiner(task->join_waiting_on, task)) {
-                task->join_result = MT_ERR_CANCELLED;
-                task->state = MT_TASK_READY;
-                mt_runq_push(task);
+                mt_task_complete_join_wait(task, MT_ERR_CANCELLED);
             }
             break;
         case MT_TASK_RUNNING:
@@ -279,7 +271,7 @@ static void mt_task_entry(void *arg) {
     mt_task_t *task = (mt_task_t *)arg;
     task->fn(task->arg);
     mt_lock();
-    task->state = MT_TASK_DEAD;
+    mt_task_mark_dead(task);
     mt_ctx_switch(&task->ctx, mt_current_scheduler_ctx());
     abort();
 }

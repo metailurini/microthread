@@ -10,10 +10,16 @@ SRC := src/microthread.c src/status.c src/io.c src/io_backend.c src/io_backend_p
 ASM_SRC :=
 INTERNAL_SRC := \
 	src/runtime_internal.h \
+	src/fd_wait_internal.h \
 	src/runtime.c \
 	src/testing_hooks.c \
 	src/stack.c \
 	src/timer.c \
+	src/run_queue.c \
+	src/task_state.c \
+	src/wait_queue.c \
+	src/select_wait.c \
+	src/join.c \
 	src/scheduler.c \
 	src/task.c \
 	src/channel.c \

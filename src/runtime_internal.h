@@ -11,6 +11,7 @@
 #include "microthread.h"
 #include "context.h"
 #include "status_internal.h"
+#include "fd_wait_internal.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -146,28 +147,6 @@ struct mt_select_waiter {
     mt_select_waiter_t *chan_next;
 };
 
-typedef enum mt_fd_waiter_state {
-    MT_FD_WAITER_REMOVED = 0,
-    /* Registered with the OS backend and counted by fd_waiting_count. */
-    MT_FD_WAITER_ACTIVE,
-    /*
-     * Backend-ready, but still conflict-reserved until the owner resumes and
-     * consumes the wait result. This closes the duplicate-waiter race between
-     * backend wakeup and task resumption on threaded schedulers.
-     */
-    MT_FD_WAITER_READY_RESERVED
-} mt_fd_waiter_state_t;
-
-struct mt_fd_waiter {
-    mt_task_t *task;
-    int fd;
-    int events;
-    uint64_t generation;
-    int ready_events;
-    mt_fd_waiter_state_t state;
-    mt_fd_waiter_t *next;
-};
-
 typedef enum mt_io_backend_kind {
     MT_IO_BACKEND_NONE = 0,
     MT_IO_BACKEND_POLL,
@@ -276,6 +255,19 @@ void mt_notify_all(void);
 mt_task_t *mt_current_task(void);
 mt_context_t *mt_current_scheduler_ctx(void);
 void mt_runq_push(mt_task_t *task);
+void mt_task_mark_ready(mt_task_t *task);
+void mt_task_mark_running(mt_task_t *task);
+void mt_task_mark_dead(mt_task_t *task);
+void mt_task_block_on_channel(mt_task_t *task,
+                              mt_chan_t *ch,
+                              mt_chan_wait_kind_t kind,
+                              void *value);
+void mt_task_complete_channel_wait(mt_task_t *task, int result);
+void mt_task_clear_channel_wait(mt_task_t *task);
+void mt_task_block_on_select(mt_task_t *task);
+void mt_task_complete_select_wait(mt_task_t *task);
+void mt_task_block_on_join(mt_task_t *task, mt_task_handle_t *handle);
+void mt_task_complete_join_wait(mt_task_t *task, int result);
 int mt_timer_push_state(mt_task_t *task, uint64_t deadline_ns, mt_task_state_t state);
 int mt_timer_remove(mt_task_t *task);
 uint64_t mt_now_ns(void);

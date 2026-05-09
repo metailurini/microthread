@@ -226,8 +226,7 @@ static void mt_wake_expired_timers(uint64_t now_ns) {
         } else if (task->state == MT_TASK_WAITING_FD) {
             mt_fd_timeout_ready(task);
         } else {
-            task->state = MT_TASK_READY;
-            mt_runq_push(task);
+            mt_task_mark_ready(task);
         }
     }
 }

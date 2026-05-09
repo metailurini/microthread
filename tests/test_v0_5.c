@@ -4,18 +4,13 @@
 #include "microthread.h"
 #include "microthread_testing.h"
 #include "microthread_debug.h"
+#include "test_helpers.h"
 
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-#define CHECK(cond) do { \
-    if (!(cond)) { \
-        fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-        abort(); \
-    } \
-} while (0)
 
 #define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 

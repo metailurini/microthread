@@ -131,12 +131,7 @@ int mt_chan_send(mt_chan_t *ch, const void *value) {
         return MT_ERR_STATE;
     }
 
-    task->chan_wait_kind = MT_CHAN_WAIT_SEND;
-    task->chan_wait_ch = ch;
-    task->chan_value = (void *)value;
-    task->chan_result = MT_OK;
-    task->state = MT_TASK_WAITING_CHAN;
-    g_rt.channel_waiting_count++;
+    mt_task_block_on_channel(task, ch, MT_CHAN_WAIT_SEND, (void *)value);
     mt_chan_waitq_push(&ch->send_head, &ch->send_tail, &ch->send_waiters, task);
     mt_ctx_switch(&task->ctx, mt_current_scheduler_ctx());
     return task->chan_result;
@@ -194,12 +189,7 @@ int mt_chan_recv(mt_chan_t *ch, void *out) {
         return MT_ERR_STATE;
     }
 
-    task->chan_wait_kind = MT_CHAN_WAIT_RECV;
-    task->chan_wait_ch = ch;
-    task->chan_value = out;
-    task->chan_result = MT_OK;
-    task->state = MT_TASK_WAITING_CHAN;
-    g_rt.channel_waiting_count++;
+    mt_task_block_on_channel(task, ch, MT_CHAN_WAIT_RECV, out);
     mt_chan_waitq_push(&ch->recv_head, &ch->recv_tail, &ch->recv_waiters, task);
     mt_ctx_switch(&task->ctx, mt_current_scheduler_ctx());
     return task->chan_result;
@@ -432,11 +422,12 @@ int mt_select(mt_select_case_t *cases, size_t count, size_t *selected_index) {
         }
         task->select_in_timer = 1;
     } else {
-        task->state = MT_TASK_WAITING_SELECT;
+        mt_task_block_on_select(task);
     }
 
-    g_rt.channel_waiting_count++;
-    task->select_counted_waiting = 1;
+    if (!task->select_counted_waiting) {
+        mt_task_block_on_select(task);
+    }
     mt_ctx_switch(&task->ctx, mt_current_scheduler_ctx());
 
     *selected_index = task->select_index;

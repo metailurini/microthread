@@ -8,6 +8,7 @@
 #include "microthread.h"
 #include "microthread_testing.h"
 #include "microthread_debug.h"
+#include "test_helpers.h"
 
 #include <assert.h>
 #include <stdint.h>

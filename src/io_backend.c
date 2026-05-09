@@ -402,8 +402,7 @@ void mt_fd_ready_waiter(mt_fd_waiter_t *waiter, int result, int ready_events) {
     task->fd_result = result;
     task->fd_ready_events = ready_events;
     if (task->state == MT_TASK_WAITING_FD) {
-        task->state = MT_TASK_READY;
-        mt_runq_push(task);
+        mt_task_mark_ready(task);
     }
 }
 
@@ -418,8 +417,7 @@ void mt_fd_timeout_ready(mt_task_t *task) {
     }
     task->fd_result = MT_ERR_TIMEOUT;
     task->fd_ready_events = 0;
-    task->state = MT_TASK_READY;
-    mt_runq_push(task);
+    mt_task_mark_ready(task);
 }
 
 static void mt_backend_fd_waiters_locked(int timeout_ms) {
@@ -507,8 +505,7 @@ const char *mt_io_backend_name_locked(void) {
 
 void mt_fd_timeout_ready(mt_task_t *task) {
     if (task) {
-        task->state = MT_TASK_READY;
-        mt_runq_push(task);
+        mt_task_mark_ready(task);
     }
 }
 

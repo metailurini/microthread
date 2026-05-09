@@ -8,6 +8,7 @@
 #include "microthread.h"
 #include "microthread_testing.h"
 #include "microthread_debug.h"
+#include "test_helpers.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -29,12 +30,6 @@
 #include <unistd.h>
 #endif
 
-#define CHECK(cond) do { \
-    if (!(cond)) { \
-        fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-        abort(); \
-    } \
-} while (0)
 
 #if !defined(_WIN32)
 #define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
