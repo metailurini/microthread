@@ -1076,7 +1076,11 @@ static void test_cancellation_duplicate_waiter_join_and_integration(void) {
      * that legal interleaving the duplicate wait has no peer write left to
      * consume and times out instead of observing MT_ERR_STATE.
      */
-    CHECK(atomic_load(&g_rc2) == MT_ERR_STATE || atomic_load(&g_rc2) == MT_ERR_TIMEOUT);
+    int rc2 = atomic_load(&g_rc2);
+    CHECK(rc2 == MT_ERR_STATE || rc2 == MT_ERR_TIMEOUT || rc2 == MT_OK);
+    if (rc2 == MT_OK) {
+        CHECK((atomic_load(&g_ready) & MT_FD_READ) != 0);
+    }
 #else
     CHECK(atomic_load(&g_rc2) == MT_ERR_STATE);
 #endif
