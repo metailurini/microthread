@@ -203,6 +203,7 @@ int mt_fd_wait(int fd, int events, uint64_t timeout_ms, int *ready_events) {
     task->fd_in_timer = 1;
     mt_ctx_switch(&task->ctx, mt_current_scheduler_ctx());
 
+    mt_lock();
     int rc = task->fd_result;
     if (rc == MT_OK) {
         *ready_events = task->fd_ready_events;
@@ -211,6 +212,7 @@ int mt_fd_wait(int fd, int events, uint64_t timeout_ms, int *ready_events) {
         task->fd_waiter = NULL;
     }
     mt_fd_free_waiter(waiter);
+    mt_unlock();
     return rc;
 }
 
