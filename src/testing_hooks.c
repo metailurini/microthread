@@ -1,5 +1,8 @@
 /* Internal implementation shard included by microthread.c. */
 
+#ifndef MT_RUNTIME_SHARD_BUILD
+#include "runtime_shard_lsp.h"
+#endif
 #ifdef MT_TESTING
 static int g_fail_next_task_alloc;
 static int g_fail_next_stack_alloc;

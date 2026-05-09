@@ -1,5 +1,8 @@
 /* Internal implementation shard included by microthread.c. */
 
+#ifndef MT_RUNTIME_SHARD_BUILD
+#include "runtime_shard_lsp.h"
+#endif
 int mt_init_with_options(const mt_options_t *options) {
     if (g_rt.initialized) {
         return MT_OK;

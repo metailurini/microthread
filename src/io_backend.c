@@ -1,6 +1,7 @@
 /* Internal I/O backend and fd-waiter implementation. */
 
 #include "runtime_internal.h"
+#include "status_internal.h"
 #include "io_backend.h"
 
 #if !defined(_WIN32)

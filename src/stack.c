@@ -1,5 +1,8 @@
 /* Internal implementation shard included by microthread.c. */
 
+#ifndef MT_RUNTIME_SHARD_BUILD
+#include "runtime_shard_lsp.h"
+#endif
 static size_t mt_page_size(void) {
 #if defined(_WIN32)
     SYSTEM_INFO info;

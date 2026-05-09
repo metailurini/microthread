@@ -1,5 +1,8 @@
 /* Internal implementation shard included by microthread.c. */
 
+#ifndef MT_RUNTIME_SHARD_BUILD
+#include "runtime_shard_lsp.h"
+#endif
 void mt_task_mark_ready(mt_task_t *task) {
     if (!task) {
         return;

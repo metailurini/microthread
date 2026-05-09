@@ -1,5 +1,8 @@
 /* Internal implementation shard included by microthread.c. */
 
+#ifndef MT_RUNTIME_SHARD_BUILD
+#include "runtime_shard_lsp.h"
+#endif
 static uint64_t mt_now_ns_raw(int *ok) {
 #if defined(_WIN32)
     static LARGE_INTEGER frequency;

@@ -1,5 +1,8 @@
 /* Internal implementation shard included by microthread.c. */
 
+#ifndef MT_RUNTIME_SHARD_BUILD
+#include "runtime_shard_lsp.h"
+#endif
 static void mt_chan_buffer_push(mt_chan_t *ch, const void *value) {
     memcpy(ch->buffer + (ch->tail * ch->elem_size), value, ch->elem_size);
     ch->tail = (ch->tail + 1u) % ch->capacity;

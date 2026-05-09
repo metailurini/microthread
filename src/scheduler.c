@@ -1,5 +1,8 @@
 /* Internal implementation shard included by microthread.c. */
 
+#ifndef MT_RUNTIME_SHARD_BUILD
+#include "runtime_shard_lsp.h"
+#endif
 static void mt_chan_ready_waiter(mt_task_t *task, int result) {
     mt_task_complete_channel_wait(task, result);
 }

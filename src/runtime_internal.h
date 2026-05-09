@@ -10,7 +10,6 @@
 
 #include "microthread.h"
 #include "context.h"
-#include "status_internal.h"
 #include "fd_wait_internal.h"
 
 #include <assert.h>

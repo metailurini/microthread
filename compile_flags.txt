@@ -1,2 +1,6 @@
+-std=c11
 -I./include
+-I./src
+-D_POSIX_C_SOURCE=200809L
 -DMT_DISABLE_GUARD_PAGES
+-Wno-undefined-internal

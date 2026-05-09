@@ -1,6 +1,7 @@
 /* Internal fd/socket public API implementation. */
 
 #include "runtime_internal.h"
+#include "status_internal.h"
 #include "io_backend.h"
 
 #if !defined(_WIN32)

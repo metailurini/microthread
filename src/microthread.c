@@ -6,6 +6,7 @@
  */
 static void mt_task_destroy(mt_task_t *task);
 
+#define MT_RUNTIME_SHARD_BUILD 1
 #include "runtime.c"
 #include "testing_hooks.c"
 #include "stack.c"

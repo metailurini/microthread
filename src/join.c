@@ -1,5 +1,8 @@
 /* Internal implementation shard included by microthread.c. */
 
+#ifndef MT_RUNTIME_SHARD_BUILD
+#include "runtime_shard_lsp.h"
+#endif
 static mt_task_status_t mt_status_from_task(const mt_task_t *task) {
     switch (task->state) {
         case MT_TASK_READY: return MT_TASK_STATUS_READY;

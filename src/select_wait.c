@@ -1,5 +1,8 @@
 /* Internal implementation shard included by microthread.c. */
 
+#ifndef MT_RUNTIME_SHARD_BUILD
+#include "runtime_shard_lsp.h"
+#endif
 static int mt_select_remove_waiter_from_channel(mt_select_waiter_t *waiter) {
     if (!waiter || !waiter->active || !waiter->ch) {
         return 0;

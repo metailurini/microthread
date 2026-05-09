@@ -1,5 +1,8 @@
 /* Internal implementation shard included by microthread.c. */
 
+#ifndef MT_RUNTIME_SHARD_BUILD
+#include "runtime_shard_lsp.h"
+#endif
 static void mt_chan_waitq_push(mt_task_t **head, mt_task_t **tail, size_t *count, mt_task_t *task) {
     task->wait_next = NULL;
     if (!*tail) {
